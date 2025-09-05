@@ -6,9 +6,17 @@ const generateRandomHex = require("../utils/randomGenerator");
 const createCategory = asyncHandler(async (req, res) => {
   try {
     const { parent } = req.body;
-    if (parent) {
+    let level = 0;
+
+     if (parent) {
       const parentCategory = await Category.findById(parent);
-      const level = parentCategory.level + 1;
+      if (!parentCategory) {
+        return res.status(404).json({ message: "Parent category not found." });
+      }
+      level = parentCategory.level + 1;
+      req.parentCategory = parentCategory; 
+    }
+
 
       const categoryData = {
         categoryId: generateRandomHex(),
@@ -20,23 +28,15 @@ const createCategory = asyncHandler(async (req, res) => {
         categoryData.image = req.images[0];
       }
 
-      const newCategory = await Category.create(categoryData);
+    const newCategory = await Category.create(categoryData);
+    
+      if (parent) {
+      const parentCategory = req.parentCategory;
       parentCategory.children.push(newCategory._id);
-      await Promise.all([newCategory.save(), parentCategory.save()]);
-      res.json(newCategory);
-    } else {
-      const categoryData = {
-        ...req.body,
-        categoryId: generateRandomHex(),
-      };
-
-      if (req.images && req.images.length > 0) {
-        categoryData.image = req.images[0];
-      }
-
-      const newCategory = await Category.create(categoryData);
-      res.json(newCategory);
+      await parentCategory.save();
     }
+
+    res.json(newCategory);
   } catch (error) {
     throw new Error(error);
   }

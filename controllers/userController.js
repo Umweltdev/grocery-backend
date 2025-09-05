@@ -12,54 +12,63 @@ const { v4: uuidv4 } = require("uuid");
 const { cloudinaryDeleteImg } = require("../utils/cloudinary");
 const axios = require("axios");
 
+// --- Configuration & Constants ---
+if (!process.env.PAYSTACK_SECRET_KEY) {
+  console.error("PAYSTACK_SECRET_KEY is missing in env");
+  throw new Error("Missing Paystack secret key");
+}
+
 const paystack = axios.create({
   baseURL: "https://api.paystack.co",
   headers: {
-    Authorization: `Bearer sk_test_72f9b6cb1cf752a0ddd3d696e2c592849ff81a12`,
+    Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
     "Content-Type": "application/json",
   },
+  timeout: 10000,
 });
 
+const PAYMENT_METHODS = { CASH: 'cash', CARD: 'card' };
+const ORDER_STATUS = {
+  PENDING: 'Pending',
+  PROCESSING: 'Processing',
+  SHIPPED: 'Shipped',
+  DELIVERED: 'Delivered',
+  CANCELLED: 'Cancelled',
+};
+
+// --- CONTROLLERS ---
+
 const createUser = asyncHandler(async (req, res) => {
-  const email = req.body.email;
-  const findUser = await User.findOne({ email: email });
+  const { email, phone } = req.body;
+  const findUser = await User.findOne({ $or: [{ email }, { phone }] });
+
   if (!findUser) {
     const newUser = await User.create(req.body);
     res.status(201).json({
-      _id: newUser?._id,
-      fullName: newUser?.fullName,
-      role: newUser?.role,
-      dob: newUser?.dob,
-      email: newUser?.email,
-      phone: newUser?.phone,
-      orders: newUser?.orderCount,
-      image: newUser?.image.url,
-      token: generateToken(newUser?._id),
+      _id: newUser._id,
+      fullName: newUser.fullName,
+      email: newUser.email,
+      phone: newUser.phone,
+      token: generateToken(newUser._id),
     });
   } else {
     res.status(409);
-    throw new Error("User With This Email Or Phone-Number Already Exists");
+    throw new Error("User with this email or phone number already exists.");
   }
 });
 
-// Login a user
 const login = asyncHandler(async (req, res) => {
   const { emailOrPhone, password } = req.body;
-  // check if user exists or not
-  const findUser = await User.findOne({
-    $or: [{ email: emailOrPhone }, { phone: emailOrPhone }],
-  });
+  const findUser = await User.findOne({ $or: [{ email: emailOrPhone }, { phone: emailOrPhone }] });
+
   if (findUser && (await findUser.isPasswordMatched(password))) {
     res.json({
-      _id: findUser?._id,
-      fullName: findUser?.fullName,
-      role: findUser?.role,
-      dob: findUser?.dob,
-      email: findUser?.email,
-      phone: findUser?.phone,
-      orders: findUser?.orderCount,
-      image: findUser?.image.url,
-      token: generateToken(findUser?._id),
+      _id: findUser._id,
+      fullName: findUser.fullName,
+      role: findUser.role,
+      email: findUser.email,
+      phone: findUser.phone,
+      token: generateToken(findUser._id),
     });
   } else {
     res.status(401);
@@ -71,25 +80,17 @@ const forgotPasswordToken = asyncHandler(async (req, res) => {
   const { email } = req.body;
   const user = await User.findOne({ email });
   if (!user) {
-    const error = new Error("User not found with this email");
-    error.statusCode = 404;
-    throw error;
+    res.status(404);
+    throw new Error("User not found with this email");
   }
-  try {
-    const token = await user.createPasswordResetToken();
-    await user.save();
-    const resetURL = `Hi, Please follow this link to reset Your Password. This link is valid till 10 minutes from now. <a href='http://localhost:8080/api/user/reset-password/${token}'>Click Here</>`;
-    const data = {
-      to: email,
-      text: "Hey User",
-      subject: "Forgot Password Link",
-      htm: resetURL,
-    };
-    sendEmail(data);
-    res.json(token);
-  } catch (error) {
-    throw new Error(error);
-  }
+
+  const token = await user.createPasswordResetToken();
+  await user.save();
+
+  const resetURL = `<p>Hi, Please follow this link to reset your password.</p><p>This link is valid for 10 minutes.</p><a href="${process.env.CLIENT_URL}/reset-password/${token}">Click Here to Reset Password</a>`;
+  const data = { to: email, text: "Password Reset", subject: "Password Reset Link", htm: resetURL };
+  sendEmail(data);
+  res.json({ message: "Password reset link sent to your email." });
 });
 
 const resetPassword = asyncHandler(async (req, res) => {
@@ -100,440 +101,382 @@ const resetPassword = asyncHandler(async (req, res) => {
     passwordResetToken: hashedToken,
     passwordResetExpires: { $gt: Date.now() },
   });
-  if (!user) throw new Error(" Token Expired, Please try again later");
+
+  if (!user) {
+    res.status(400);
+    throw new Error("Token Expired or Invalid. Please try again.");
+  }
+
   user.password = password;
   user.passwordResetToken = undefined;
   user.passwordResetExpires = undefined;
   await user.save();
-  res.json(user);
+  res.json({ message: "Password has been reset successfully." });
 });
 
 const getLoggedInUserProfile = asyncHandler(async (req, res) => {
   const { _id } = req.user;
   validateMongoDbId(_id);
-
-  try {
-    const user = await User.findById(_id, "-updatedAt -createdAt -__v");
-    res.status(200).json(user);
-  } catch (error) {
-    throw new Error(error);
+  const user = await User.findById(_id).select("-password -__v");
+  if (!user) {
+    res.status(404);
+    throw new Error("User not found");
   }
+  res.status(200).json(user);
 });
 
 const updatedUserProfile = asyncHandler(async (req, res) => {
   const { _id } = req.user;
   validateMongoDbId(_id);
-  try {
-    const user = await User.findById(_id);
-    delete req.body.image;
-    const updateObject = { ...req.body };
-    if (req.images && req.images.length > 0) {
-      updateObject.image = req.images[0];
-      if(user.image && user.image.public_id) {
-        await cloudinaryDeleteImg(user.image.public_id);
-      }
-    }
-    const updatedUser = await User.findByIdAndUpdate(
-      _id,
-      updateObject,
-      {
-        new: true,
-      }
-    );
-    res.json(updatedUser);
-  } catch (error) {
-    throw new Error(error);
+  const user = await User.findById(_id);
+  if (!user) {
+    res.status(404);
+    throw new Error("User not found");
   }
+
+  const { fullName, dob, phone } = req.body;
+  const updateData = { fullName, dob, phone };
+
+  if (req.images && req.images.length > 0) {
+    updateData.image = req.images[0];
+    if (user.image?.public_id) {
+      await cloudinaryDeleteImg(user.image.public_id);
+    }
+  }
+
+  const updatedUser = await User.findByIdAndUpdate(_id, updateData, { new: true }).select("-password");
+  res.json(updatedUser);
 });
 
 const getAllUser = asyncHandler(async (req, res) => {
-  try {
-    const getUsers = await User.find().select('-password -passwordResetToken -passwordResetExpires -wishlist');
-    res.status(200).json(getUsers);
-  } catch (error) {
-    throw new Error(error);
-  }
+  const getUsers = await User.find().select("-password -__v");
+  res.status(200).json(getUsers);
 });
 
 const getAUser = asyncHandler(async (req, res) => {
   const { id } = req.params;
   validateMongoDbId(id);
-
-  try {
-    const getaUser = await User.findById(id).select('-password -passwordResetToken -passwordResetExpires -wishlist');
-    if (!getaUser) {
-      const error = new Error("User not found with this email");
-      error.statusCode = 404;
-      throw error;
-    }
-    res.status(200).json(
-      getaUser,
-    );
-  } catch (error) {
-    throw new Error(error);
+  const user = await User.findById(id).select("-password -__v");
+  if (!user) {
+    res.status(404);
+    throw new Error("User not found");
   }
+  res.status(200).json(user);
 });
 
 const updateAUser = asyncHandler(async (req, res) => {
   const { id } = req.params;
   validateMongoDbId(id);
-
-  try {
-    const updatedUser = await User.findByIdAndUpdate(
-      id,
-      {
-        fullName: req?.body?.fullName,
-        email: req?.body?.email,
-        phone: req?.body?.phone,
-        dob: req?.body?.dob,
-      },
-      {
-        new: true,
-      }
-    );
-    res.json(updatedUser);
-  } catch (error) {
-    throw new Error(error);
+  const { fullName, email, phone, dob } = req.body;
+  const updatedUser = await User.findByIdAndUpdate(id, { fullName, email, phone, dob }, { new: true }).select("-password");
+  if (!updatedUser) {
+    res.status(404);
+    throw new Error("User not found");
   }
+  res.json(updatedUser);
 });
 
 const deleteAUser = asyncHandler(async (req, res) => {
   const { id } = req.params;
   validateMongoDbId(id);
-
-  try {
-    const deleteaUser = await User.findByIdAndDelete(id);
-    res.json({
-      deleteaUser,
-    });
-  } catch (error) {
-    throw new Error(error);
+  const user = await User.findByIdAndDelete(id);
+  if (!user) {
+    res.status(404);
+    throw new Error("User not found");
   }
+  await Cart.deleteMany({ orderBy: id });
+  await Card.deleteMany({ owner: id });
+  res.status(200).json({ message: "User and related data deleted successfully." });
 });
 
 const getWishlist = asyncHandler(async (req, res) => {
   const { _id } = req.user;
-  try {
-    const findUser = await User.findById({_id}, 'wishlist').populate("wishlist");
-    res.json(findUser);
-  } catch (error) {
-    throw new Error(error);
-  }
+  validateMongoDbId(_id);
+  const findUser = await User.findById(_id).populate("wishlist");
+  res.json(findUser.wishlist);
 });
 
+// --- Wishlist ---
+const addToWishlist = asyncHandler(async (req, res) => {
+    const { _id } = req.user;
+    const { prodId } = req.body;
+    validateMongoDbId(_id);
+    validateMongoDbId(prodId);
+  
+    const user = await User.findById(_id);
+    const alreadyAdded = user.wishlist.find((id) => id.toString() === prodId);
+  
+    let updatedUser;
+    if (alreadyAdded) {
+      updatedUser = await User.findByIdAndUpdate(_id, { $pull: { wishlist: prodId } }, { new: true });
+    } else {
+      updatedUser = await User.findByIdAndUpdate(_id, { $push: { wishlist: prodId } }, { new: true });
+    }
+    
+    res.json(updatedUser);
+});
+
+// --- Cart ---
 const userCart = asyncHandler(async (req, res) => {
   const { cart } = req.body;
   const { _id } = req.user;
   validateMongoDbId(_id);
-  try {
-    let products = [];
-    const user = await User.findById(_id);
-    // Check if the user already has a cart and remove it
-    const alreadyExistCart = await Cart.findOne({ orderBy: user._id });
-    if (alreadyExistCart) {
-      await Cart.deleteMany({ _id: alreadyExistCart._id });
-    }
 
-    for (let i = 0; i < cart.length; i++) {
-      const product = await Product.findById(cart[i].id)
-        .select("regularPrice salePrice stock")
-        .exec();
-      if (!product) {
-        continue;
-      }
-      if (product.stock <= 0 || product.sold >= product.stock) {
-        continue;
-      }
-      let object = {};
-      object.id = cart[i].id;
-      object.count = cart[i].count;
-      object.price = product.salePrice || product.regularPrice;
-      object.name = product.name;
-      object.image = cart[i].image;
-      products.push(object);
-    }
-    let cartTotal = 0;
-    for (let i = 0; i < products.length; i++) {
-      cartTotal += products[i].price * products[i].count;
-    }
-    const existingCart = await Cart.findOne({ orderBy: user._id });
-    if (existingCart) {
-      existingCart.products = products;
-      existingCart.cartTotal = cartTotal;
-      await existingCart.save();
-      return res.json(existingCart);
-    } else {
-      let newCart = await new Cart({ 
-        products,
-        cartTotal,
-        orderBy: user?._id,
-      }).save();
-      return res.json(newCart);
-    }
-  } catch (error) {
-    console.log(error);
-    throw new Error(error);
+  if (!cart || !Array.isArray(cart) || cart.length === 0) {
+    return res.status(400).json({ message: "Cart is empty or invalid" });
   }
+  
+  let products = [];
+  let cartTotal = 0;
+
+  for (const item of cart) {
+    const product = await Product.findById(item.product).select("price stock name").exec();
+    if (!product) {
+      res.status(404);
+      throw new Error(`Product with ID ${item.product} not found`);
+    }
+    if (product.stock < item.count) {
+      res.status(400);
+      throw new Error(`Insufficient stock for ${product.name}. Only ${product.stock} left.`);
+    }
+    cartTotal += product.price * item.count;
+    products.push({ product: item.product, count: item.count, price: product.price });
+  }
+
+  const newCart = await Cart.findOneAndUpdate(
+    { orderBy: _id },
+    { products, cartTotal, orderBy: _id },
+    { new: true, upsert: true }
+  );
+  res.status(201).json(newCart);
 });
 
 const getUserCart = asyncHandler(async (req, res) => {
   const { _id } = req.user;
   validateMongoDbId(_id);
-  try {
-    const cart = await Cart.findOne({ orderBy: _id }).populate("products.id");
-    res.json(cart);
-  } catch (error) {
-    throw new Error(error);
+  const cart = await Cart.findOne({ orderBy: _id }).populate({
+    path: "products.product",
+    select: "name regularPrice salePrice stock image",
+  });
+  if (!cart) {
+    return res.status(200).json({ message: "Cart is empty", products: [], cartTotal: 0 });
   }
+  res.status(200).json(cart);
 });
 
 const emptyCart = asyncHandler(async (req, res) => {
   const { _id } = req.user;
   validateMongoDbId(_id);
-  try {
-    const user = await User.findOne({ _id });
-    const cart = await Cart.findOneAndRemove({ orderBy: user._id });
-    res.json(cart);
-  } catch (error) {
-    throw new Error(error);
+  const cart = await Cart.findOneAndRemove({ orderBy: _id });
+  if (!cart) {
+    res.status(404);
+    throw new Error("Cart not found or was already empty.");
   }
+  res.status(200).json({ message: "Cart emptied successfully." });
 });
 
+// --- Orders ---
 const createOrder = asyncHandler(async (req, res) => {
-  const {
-    paymentMethod,
-    address,
-    deliveryDate,
-    deliveryTime,
-    comment,
-    cardId,
-  } = req.body;
+  const { paymentMethod, address, deliveryDate, deliveryTime, comment, cardId } = req.body;
   const { _id } = req.user;
   validateMongoDbId(_id);
-  let orderStatus;
-  const validPaymentMethods = ["cash", "card"];
-  if (!validPaymentMethods.includes(paymentMethod))
-    return res.status(400).json({ error: "Invalid payment method" });
 
-  if (paymentMethod === "cash") {
-    orderStatus = "Processing";
-  } else if (paymentMethod === "card") {
-    try {
-      const user = await User.findById(_id);
-      const userCart = await Cart.findOne({ orderBy: user._id });
-      const orderId = uuidv4();
-      let paystackPayment;
+  if (!Object.values(PAYMENT_METHODS).includes(paymentMethod)) {
+    return res.status(400).json({ message: "Invalid payment method." });
+  }
+  if (!address?.trim()) {
+    return res.status(400).json({ message: "Delivery address is required." });
+  }
 
-      if (cardId) {
-        const card = await Card.findById(cardId);
-        if (!card) {
-          return res.status(404).json({ error: "Card not found" });
-        }
-        paystackPayment = await initializePaystackCheckoutWithCard(
-          userCart.cartTotal,
-          user.email,
-          card.cardDetails.authorization_code
-        );
+  const user = await User.findById(_id);
+  const userCart = await Cart.findOne({ orderBy: user._id });
+  if (!userCart || userCart.products.length === 0) {
+    return res.status(400).json({ message: "Cannot create order, your cart is empty." });
+  }
 
-        if (paystackPayment.status === "success") {
-          await createNewOrder(
-            orderId,
-            userCart.products,
-            paymentMethod,
-            userCart.cartTotal,
-            user._id,
-            "Processing",
-            address,
-            comment,
-            deliveryDate,
-            deliveryTime,
-            paystackPayment.reference
-          );
-          user.orderCount += 1;
-          await user.save();
-          await updateProductStock(userCart.products);
-          await Cart.deleteOne({ orderBy: user._id });
-          return res.json({
-            message: "success",
-            status: paystackPayment.status,
-          });
-        } else {
-          // Payment was not successful
-          return res.status(400).json({ error: "Payment failed" });
-        }
-      } else {
-        paystackPayment = await initializePaystackCheckout(
-          userCart.cartTotal,
-          user.email,
-          user._id
-        );
-        await createNewOrder(
-          orderId,
-          userCart.products,
-          paymentMethod,
-          userCart.cartTotal,
-          user._id,
-          "Processing",
-          address,
-          comment,
-          deliveryDate,
-          deliveryTime,
-          paystackPayment.reference
-        );
-        user.orderCount += 1;
-        await user.save();
-        await updateProductStock(userCart.products);
-        await Cart.deleteOne({ orderBy: user._id });
-        return res.json({
-          message: "success",
-          authorizationUrl: paystackPayment.authorizationUrl,
-        });
-      }
-    } catch (error) {
-      throw new Error(error);
+  for (const item of userCart.products) {
+    const product = await Product.findById(item.product);
+    if (!product || product.stock < item.count) {
+      return res.status(400).json({ message: `Insufficient stock for ${product.name}` });
     }
   }
-  try {
-    const user = await User.findById(_id);
-    let userCart = await Cart.findOne({ orderBy: user._id });
-    let finalAmout = userCart.cartTotal;
-    const orderId = uuidv4();
-    await createNewOrder(
-      orderId,
-      userCart.products,
-      paymentMethod,
-      userCart.cartTotal,
-      user._id,
-      orderStatus,
-      address,
-      comment,
-      deliveryDate,
-      deliveryTime
-    );
-    user.orderCount += 1;
-    await user.save();
-    await updateProductStock(userCart.products);
-    await Cart.deleteOne({ orderBy: user._id });
-    res.json({ message: "success" });
-  } catch (error) {
-    throw new Error(error);
+
+  let orderStatus = ORDER_STATUS.PENDING;
+  let paystackPayment;
+  let reference = `cash_${uuidv4()}`;
+
+  if (paymentMethod === PAYMENT_METHODS.CARD) {
+    if (cardId) {
+      const card = await Card.findById(cardId);
+      if (!card) return res.status(404).json({ message: "Saved card not found." });
+      paystackPayment = await initializePaystackCheckoutWithCard(userCart.cartTotal, user.email, card.cardDetails.authorization_code);
+      if (paystackPayment.status !== 'success') {
+        return res.status(400).json({ message: "Card payment failed, please try another card." });
+      }
+      orderStatus = ORDER_STATUS.PROCESSING;
+    } else {
+      paystackPayment = await initializePaystackCheckout(userCart.cartTotal, user.email, user._id);
+    }
+    reference = paystackPayment.reference;
+  } else {
+    orderStatus = ORDER_STATUS.PROCESSING;
   }
+
+  const newOrder = await new Order({
+    products: userCart.products,
+    paymentMethod,
+    totalPrice: userCart.cartTotal,
+    orderBy: user._id,
+    orderStatus,
+    address,
+    comment,
+    deliveryDate,
+    deliveryTime,
+    reference,
+  }).save();
+
+  await updateProductStock(userCart.products);
+  await Cart.deleteOne({ orderBy: user._id });
+
+  const populatedOrder = await Order.findById(newOrder._id).populate("products.product", "name image");
+  const response = { message: "Order created successfully", order: populatedOrder };
+  if (paymentMethod === PAYMENT_METHODS.CARD && !cardId) {
+    response.authorizationUrl = paystackPayment.authorizationUrl;
+  }
+  res.status(201).json(response);
 });
 
 const getUserOrders = asyncHandler(async (req, res) => {
   const { _id } = req.user;
   validateMongoDbId(_id);
-  try {
-    const userorders = await Order.find({ orderBy: _id })
-      .populate("products.product")
-      .populate("orderBy")
-      .exec();
-    res.json(userorders);
-  } catch (error) {
-    throw new Error(error);
-  }
+  const orders = await Order.find({ orderBy: _id }).populate("products.product", "name image").sort("-createdAt");
+  res.status(200).json(orders);
 });
 
 const getOrderById = asyncHandler(async (req, res) => {
   const { id } = req.params;
   validateMongoDbId(id);
-  try {
-    const userorders = await Order.findById({ _id: id })
-      .populate({
-        path: "products.product",
-        select: "name description regularPrice salePrice",
-      })
-      .populate("orderBy")
-      .populate("address")
-      .exec();
-    res.json(userorders);
-  } catch (error) {
-    throw new Error(error);
+  const order = await Order.findById(id).populate("products.product", "name image").populate("orderBy", "fullName email phone");
+  if (!order) {
+    res.status(404);
+    throw new Error("Order not found");
   }
+  res.status(200).json(order);
 });
 
 const getAllOrders = asyncHandler(async (req, res) => {
-  try {
-    const alluserorders = await Order.find().populate("address").exec();
-    res.json(alluserorders);
-  } catch (error) {
-    throw new Error(error);
-  }
+  const orders = await Order.find().populate("orderBy", "fullName email").sort("-createdAt");
+  res.status(200).json(orders);
 });
 
 const getOrdersByUserId = asyncHandler(async (req, res) => {
   const { id } = req.params;
   validateMongoDbId(id);
-  try {
-    const userorders = await Order.find({ orderBy: id })
-      .populate("products.product")
-      .populate("orderBy")
-      .exec();
-    res.json(userorders);
-  } catch (error) {
-    throw new Error(error);
-  }
+  const orders = await Order.find({ orderBy: id }).populate("products.product", "name image").populate("orderBy", "fullName email phone").sort("-createdAt");
+  res.status(200).json(orders);
 });
 
 const updateOrderStatus = asyncHandler(async (req, res) => {
-  const { orderStatus, isPaid } = req.body;
+  const { orderStatus } = req.body;
   const { id } = req.params;
   validateMongoDbId(id);
-  try {
-    const updateOrderStatus = await Order.findByIdAndUpdate(
-      id,
-      {
-        orderStatus,
-        isPaid,
-      },
-      { new: true }
-    );
-    res.json(updateOrderStatus);
-  } catch (error) {
-    throw new Error(error);
+  if (!Object.values(ORDER_STATUS).includes(orderStatus)) {
+    res.status(400);
+    throw new Error("Invalid order status provided.");
   }
+  const order = await Order.findByIdAndUpdate(id, { orderStatus }, { new: true });
+  if (!order) {
+    res.status(404);
+    throw new Error("Order not found");
+  }
+  res.status(200).json({ message: "Order status updated successfully", order });
 });
 
+// --- Webhooks ---
 const paystackWebhook = asyncHandler(async (req, res) => {
-  const secret = "sk_test_72f9b6cb1cf752a0ddd3d696e2c592849ff81a12";
-  const hash = req.headers["x-paystack-signature"];
+  const secret = process.env.PAYSTACK_SECRET_KEY;
+  const signature = req.headers["x-paystack-signature"];
+  if (!signature) {
+    return res.status(400).json({ message: "Invalid request: No signature" });
+  }
+
   const hmac = crypto.createHmac("sha512", secret);
   hmac.update(JSON.stringify(req.body));
   const digest = hmac.digest("hex");
-  if (digest !== hash) {
-    console.error("Invalid webhook signature");
-    res.status(400).send("Invalid signature");
-    return;
+
+  if (digest !== signature) {
+    return res.status(400).json({ message: "Invalid signature" });
   }
-  const event = req.body.event;
-  const data = req.body.data;
+
+  const { event, data } = req.body;
   if (event === "charge.success") {
-    const paymentReference = data.reference;
-    try {
-      const order = await Order.findOne({ reference: paymentReference });
-      await Order.findByIdAndUpdate(
-        { _id: order._id },
-        {
-          isPaid: true,
-        },
-        { new: true }
-      );
-      const existingCard = await Card.findOne({
-        "cardDetails.authorization_code": data.authorization.authorization_code,
-      });
-      if (!existingCard) {
-        await Card.create({
-          cardDetails: data.authorization,
-          owner: data.metadata.userId,
-        });
+    const order = await Order.findOne({ reference: data.reference });
+    if (order && !order.isPaid) {
+      order.isPaid = true;
+      order.orderStatus = ORDER_STATUS.PROCESSING;
+      await order.save();
+      const existingCard = await Card.findOne({ "cardDetails.authorization_code": data.authorization.authorization_code });
+      if (!existingCard && data.metadata?.userId) {
+        await Card.create({ cardDetails: data.authorization, owner: data.metadata.userId });
       }
-    } catch (error) {
-      throw new Error(error);
     }
   }
   res.sendStatus(200);
 });
 
+// --- Helper Functions ---
+async function initializePaystackCheckout(amount, email, userId) {
+  try {
+    const { data } = await paystack.post("/transaction/initialize", {
+      email,
+      amount: amount * 100,
+      channels: ["card"],
+      metadata: { userId },
+    });
+    return {
+      authorizationUrl: data.data.authorization_url,
+      reference: data.data.reference,
+    };
+  } catch (error) {
+    console.error("Paystack checkout error:", error.response?.data || error.message);
+    throw new Error(error.response?.data?.message || "Paystack checkout failed");
+  }
+}
+
+async function initializePaystackCheckoutWithCard(amount, email, authorization_code) {
+  try {
+    const { data } = await paystack.post("/transaction/charge_authorization", {
+      email,
+      amount: amount * 100,
+      authorization_code,
+    });
+    return {
+      reference: data.data.reference,
+      status: data.data.status,
+    };
+  } catch (error) {
+    console.error("Paystack saved-card error:", error.response?.data || error.message);
+    throw new Error(error.response?.data?.message || "Paystack charge failed");
+  }
+}
+
+const updateProductStock = async (products) => {
+  if (!products?.length) return;
+  const bulkOperations = products.map((item) => ({
+    updateOne: {
+      filter: { _id: item.product, stock: { $gte: item.count } },
+      update: { $inc: { stock: -item.count, sold: +item.count } },
+    },
+  }));
+  try {
+    await Product.bulkWrite(bulkOperations);
+  } catch (error) {
+    console.error("Stock update error:", error);
+    throw new Error("Failed to update product stock");
+  }
+};
+
+// --- Exports ---
 module.exports = {
   createUser,
   login,
@@ -546,6 +489,7 @@ module.exports = {
   forgotPasswordToken,
   resetPassword,
   getWishlist,
+  addToWishlist,
   userCart,
   getUserCart,
   emptyCart,
@@ -556,81 +500,4 @@ module.exports = {
   getUserOrders,
   updateOrderStatus,
   paystackWebhook,
-};
-
-async function initializePaystackCheckout(amount, email, userId) {
-  const { data } = await paystack.post("/transaction/initialize", {
-    email: email,
-    amount: amount * 100,
-    channels: ["card"],
-    metadata: {
-      userId: userId,
-    },
-  });
-
-  return {
-    authorizationUrl: data.data.authorization_url,
-    reference: data.data.reference,
-  };
-}
-
-async function initializePaystackCheckoutWithCard(
-  amount,
-  email,
-  authorization_code
-) {
-  const { data } = await paystack.post("/transaction/charge_authorization", {
-    email: email,
-    amount: amount * 100,
-    authorization_code: authorization_code,
-  });
-
-  return {
-    reference: data.data.reference,
-    status: data.data.status,
-  };
-}
-
-const createNewOrder = async (
-  orderId,
-  products,
-  paymentMethod,
-  totalPrice,
-  userId,
-  orderStatus,
-  address,
-  comment,
-  deliveryDate,
-  deliveryTime,
-  reference
-) => {
-  return new Order({
-    orderId,
-    products: products.map((product) => ({
-      product: product.id,
-      price: product.price,
-      count: product.count,
-      image: product.image,
-    })),
-    paymentMethod,
-    totalPrice,
-    orderBy: userId,
-    orderStatus,
-    address,
-    comment,
-    deliveryDate,
-    deliveryTime,
-    reference,
-  }).save();
-};
-
-const updateProductStock = async (products) => {
-  const updateOperations = products.map((item) => ({
-    updateOne: {
-      filter: { _id: item.id },
-      update: { $inc: { stock: -item.count, sold: +item.count } },
-    },
-  }));
-
-  await Product.bulkWrite(updateOperations, {});
 };
