@@ -10,6 +10,7 @@ const brandRouter = require("./routes/brandRoute");
 const productRouter = require("./routes/productRoute");
 const addressRouter = require("./routes/addressRoute");
 const cardRouter = require("./routes/cardRoute");
+const pricingRouter = require("./routes/pricingRoute");
 const cors = require("cors");
 
 
@@ -23,6 +24,7 @@ app.use("/api/brand", brandRouter);
 app.use("/api/product", productRouter);
 app.use("/api/address", addressRouter);
 app.use("/api/card", cardRouter);
+app.use("/api/pricing", pricingRouter);
 
 
 app.use(notFound); 
