@@ -12,7 +12,6 @@ const { v4: uuidv4 } = require("uuid");
 const { cloudinaryDeleteImg } = require("../utils/cloudinary");
 const axios = require("axios");
 
-// --- Configuration & Constants ---
 if (!process.env.PAYSTACK_SECRET_KEY) {
   console.error("PAYSTACK_SECRET_KEY is missing in env");
   throw new Error("Missing Paystack secret key");
@@ -232,70 +231,78 @@ const userCart = asyncHandler(async (req, res) => {
   const { cart } = req.body;
   const { _id } = req.user;
   validateMongoDbId(_id);
+
   try {
-    let products = [];
     const user = await User.findById(_id);
-    // Check if the user already has a cart and remove it
-    const alreadyExistCart = await Cart.findOne({ orderBy: user._id });
-    if (alreadyExistCart) {
-      await Cart.deleteMany({ _id: alreadyExistCart._id });
-    }
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    let products = [];
 
     for (let i = 0; i < cart.length; i++) {
       const product = await Product.findById(cart[i].id)
-        .select("regularPrice salePrice stock")
+        .select("regularPrice salePrice stock name")
         .exec();
-      if (!product) {
-        continue;
-      }
-      if (product.stock <= 0 || product.sold >= product.stock) {
-        continue;
-      }
-      let object = {};
-      object.id = cart[i].id;
-      object.count = cart[i].count;
-      object.price = product.salePrice || product.regularPrice;
-      object.name = product.name;
-      object.image = cart[i].image;
-      products.push(object);
+      if (!product || product.stock <= 0 || product.sold >= product.stock) continue;
+
+      products.push({
+        id: cart[i].id,
+        count: cart[i].count,
+        price: product.salePrice || product.regularPrice,
+        name: product.name,
+        image: cart[i].image,
+      });
     }
-    let cartTotal = 0;
-    for (let i = 0; i < products.length; i++) {
-      cartTotal += products[i].price * products[i].count;
-    }
+
+    const cartTotal = products.reduce((total, p) => total + p.price * p.count, 0);
+
     const existingCart = await Cart.findOne({ orderBy: user._id });
+
     if (existingCart) {
       existingCart.products = products;
       existingCart.cartTotal = cartTotal;
       await existingCart.save();
       return res.json(existingCart);
-    } else {
-      let newCart = await new Cart({ 
-        products,
-        cartTotal,
-        orderBy: user?._id,
-      }).save();
-      return res.json(newCart);
     }
+
+    // If no cart exists, create new
+    const newCart = await Cart.create({
+      products,
+      cartTotal,
+      orderBy: user._id,
+    });
+
+    return res.json(newCart);
   } catch (error) {
-    console.log(error);
-    throw new Error(error);
+    console.error(error);
+    return res.status(500).json({ message: "Failed to update cart", error: error.message });
   }
 });
+
 
 const getUserCart = asyncHandler(async (req, res) => {
   const { _id } = req.user;
   validateMongoDbId(_id);
+
   try {
     const cart = await Cart.findOne({ orderBy: _id }).populate("products.id");
+
     if (!cart) {
-      return res.status(404).json({ message: "Cart is empty or invalid" });
+      return res.status(404).json({ message: "Cart not found or empty" });
     }
+
     res.json(cart);
   } catch (error) {
-    throw new Error(error);
+    // Narrow down the error
+    if (error.name === "DocumentNotFoundError") {
+      console.warn(`Cart for user ${_id} not found.`);
+      return res.status(404).json({ message: "Cart not found" });
+    }
+
+    console.error(error);
+    res.status(500).json({ message: "Server error" });
   }
 });
+
 
 
 const emptyCart = asyncHandler(async (req, res) => {
