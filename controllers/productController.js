@@ -107,7 +107,7 @@ const getaProduct = asyncHandler(async (req, res) => {
     
     const PricingService = require("../utils/pricingService");
     const userId = req.user?._id;
-    const pricing = await PricingService.calculateFinalPrice(findProduct.regularPrice, userId);
+    const pricing = await PricingService.calculateProductPricing(findProduct.regularPrice, userId);
     
     res.json({
       ...findProduct.toObject(),
@@ -226,7 +226,7 @@ const getAllProduct = asyncHandler(async (req, res) => {
     
     const productsWithPricing = await Promise.all(
       products.map(async (product) => {
-        const pricing = await PricingService.calculateFinalPrice(product.regularPrice, userId);
+        const pricing = await PricingService.calculateProductPricing(product.regularPrice, userId);
         return {
           ...product.toObject(),
           pricing
