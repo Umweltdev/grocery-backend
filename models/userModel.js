@@ -42,6 +42,14 @@ const userSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    totalSpend: {
+      type: Number,
+      default: 0,
+    },
+    totalVisits: {
+      type: Number,
+      default: 0,
+    },
   },
   {
     timestamps: true,

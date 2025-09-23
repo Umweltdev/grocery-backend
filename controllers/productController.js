@@ -104,7 +104,15 @@ const getaProduct = asyncHandler(async (req, res) => {
       .populate("category")
       .populate("brand")
       .populate("ratings.postedby");
-    res.json(findProduct);
+    
+    const PricingService = require("../utils/pricingService");
+    const userId = req.user?._id;
+    const pricing = await PricingService.calculateProductPricing(findProduct.regularPrice, userId);
+    
+    res.json({
+      ...findProduct.toObject(),
+      pricing
+    });
   } catch (error) {
     throw new Error(error);
   }
@@ -212,7 +220,21 @@ const getAllProduct = asyncHandler(async (req, res) => {
     query = query.populate("category brand ratings.postedby");
 
     const products = await query;
-    res.json(products);
+    
+    const PricingService = require("../utils/pricingService");
+    const userId = req.user?._id;
+    
+    const productsWithPricing = await Promise.all(
+      products.map(async (product) => {
+        const pricing = await PricingService.calculateProductPricing(product.regularPrice, userId);
+        return {
+          ...product.toObject(),
+          pricing
+        };
+      })
+    );
+    
+    res.json(productsWithPricing);
   } catch (error) {
     throw new Error(error);
   }
