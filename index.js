@@ -12,12 +12,21 @@ const addressRouter = require("./routes/addressRoute");
 const cardRouter = require("./routes/cardRoute");
 const pricingRouter = require("./routes/pricingRoute");
 const cors = require("cors");
+const { stripeWebhook } = require("./controllers/userController");
+
+// Stripe webhook requires raw body
+const stripeWebhookHandler = express.raw({ type: 'application/json' });
 
 
  dbConnect();
 app.use(cors());
+
+// Stripe webhook endpoint with raw body parsing (must be before JSON parser)
+app.post("/api/user/stripe-webhook", stripeWebhookHandler, stripeWebhook);
+// General JSON parsing for all other routes
 app.use(express.json());
-app.use(express.urlencoded({extended: false}))
+app.use(express.urlencoded({extended: false}));
+
 app.use("/api/user", userRouter);
 app.use("/api/category", categoryRouter);
 app.use("/api/brand", brandRouter);
