@@ -285,15 +285,15 @@ const userCart = asyncHandler(async (req, res) => {
 
 const getUserCart = asyncHandler(async (req, res) => {
   const { _id } = req.user;
-  validateMongoDbId(_id);
   try {
-    const cart = await Cart.findOne({ orderBy: _id }).populate("products.id");
+    validateMongoDbId(_id);
+    const cart = await Cart.findOne({ orderBy: _id });
     if (!cart) {
-      return res.status(404).json({ message: "Cart is empty or invalid" });
+      return res.json({ products: [], cartTotal: 0 });
     }
     res.json(cart);
   } catch (error) {
-    throw new Error(error);
+    res.json({ products: [], cartTotal: 0 });
   }
 });
 
