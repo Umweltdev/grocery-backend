@@ -11,6 +11,7 @@ const sendEmail = require("./emailContoller");
 const { v4: uuidv4 } = require("uuid");
 const { cloudinaryDeleteImg } = require("../utils/cloudinary");
 const axios = require("axios");
+const NotificationService = require("../services/notificationService");
 
 // --- Configuration & Constants ---
 if (!process.env.PAYSTACK_SECRET_KEY) {
@@ -321,14 +322,12 @@ const createOrder = asyncHandler(async (req, res) => {
   } = req.body;
   const { _id } = req.user;
   validateMongoDbId(_id);
-  let orderStatus;
+  let orderStatus = "Pending";
   const validPaymentMethods = ["cash", "card"];
   if (!validPaymentMethods.includes(paymentMethod))
     return res.status(400).json({ error: "Invalid payment method" });
 
-  if (paymentMethod === "cash") {
-    orderStatus = "Processing";
-  } else if (paymentMethod === "card") {
+  if (paymentMethod === "card") {
     try {
       const user = await User.findById(_id);
       const userCart = await Cart.findOne({ orderBy: user._id });
@@ -347,13 +346,13 @@ const createOrder = asyncHandler(async (req, res) => {
         );
 
         if (paystackPayment.status === "success") {
-          await createNewOrder(
+          const newOrder = await createNewOrder(
             orderId,
             userCart.products,
             paymentMethod,
             userCart.cartTotal,
             user._id,
-            "Processing",
+            orderStatus,
             address,
             comment,
             deliveryDate,
@@ -364,12 +363,15 @@ const createOrder = asyncHandler(async (req, res) => {
           await user.save();
           await updateProductStock(userCart.products);
           await Cart.deleteOne({ orderBy: user._id });
+          
+          // Send email to admin about new order
+          await NotificationService.sendOrderNotificationToAdmin(newOrder, user);
+          
           return res.json({
             message: "success",
             status: paystackPayment.status,
           });
         } else {
-          // Payment was not successful
           return res.status(400).json({ error: "Payment failed" });
         }
       } else {
@@ -378,13 +380,13 @@ const createOrder = asyncHandler(async (req, res) => {
           user.email,
           user._id
         );
-        await createNewOrder(
+        const newOrder = await createNewOrder(
           orderId,
           userCart.products,
           paymentMethod,
           userCart.cartTotal,
           user._id,
-          "Processing",
+          orderStatus,
           address,
           comment,
           deliveryDate,
@@ -395,6 +397,10 @@ const createOrder = asyncHandler(async (req, res) => {
         await user.save();
         await updateProductStock(userCart.products);
         await Cart.deleteOne({ orderBy: user._id });
+        
+        // Send email to admin about new order
+        await NotificationService.sendOrderNotificationToAdmin(newOrder, user);
+        
         return res.json({
           message: "success",
           authorizationUrl: paystackPayment.authorizationUrl,
@@ -407,9 +413,8 @@ const createOrder = asyncHandler(async (req, res) => {
   try {
     const user = await User.findById(_id);
     let userCart = await Cart.findOne({ orderBy: user._id });
-    let finalAmout = userCart.cartTotal;
     const orderId = uuidv4();
-    await createNewOrder(
+    const newOrder = await createNewOrder(
       orderId,
       userCart.products,
       paymentMethod,
@@ -425,6 +430,10 @@ const createOrder = asyncHandler(async (req, res) => {
     await user.save();
     await updateProductStock(userCart.products);
     await Cart.deleteOne({ orderBy: user._id });
+    
+    // Send email to admin about new order
+    await NotificationService.sendOrderNotificationToAdmin(newOrder, user);
+    
     res.json({ message: "success" });
   } catch (error) {
     throw new Error(error);
@@ -465,7 +474,14 @@ const getOrderById = asyncHandler(async (req, res) => {
 
 const getAllOrders = asyncHandler(async (req, res) => {
   try {
-    const alluserorders = await Order.find().populate("address").exec();
+    const alluserorders = await Order.find()
+      .populate("address")
+      .populate({
+        path: "orderBy",
+        select: "email fullName"
+      })
+      .exec();
+    console.log("Sample order with user data:", JSON.stringify(alluserorders[0], null, 2));
     res.json(alluserorders);
   } catch (error) {
     throw new Error(error);
@@ -491,15 +507,22 @@ const updateOrderStatus = asyncHandler(async (req, res) => {
   const { id } = req.params;
   validateMongoDbId(id);
   try {
-    const updateOrderStatus = await Order.findByIdAndUpdate(
+    const order = await Order.findById(id).populate('orderBy');
+    const updatedOrder = await Order.findByIdAndUpdate(
       id,
       {
         orderStatus,
         isPaid,
       },
       { new: true }
-    );
-    res.json(updateOrderStatus);
+    ).populate('orderBy');
+    
+    // Send email notification to customer based on status change
+    if (order.orderStatus !== orderStatus) {
+      await NotificationService.sendOrderStatusUpdateToCustomer(updatedOrder, orderStatus);
+    }
+    
+    res.json(updatedOrder);
   } catch (error) {
     throw new Error(error);
   }
