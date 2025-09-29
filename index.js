@@ -3,7 +3,6 @@ const dbConnect = require("./config/dbConnect");
 const { notFound, errorHandler } = require("./middlewares/errorHandler");
 const dotenv = require("dotenv").config();
 const cors = require("cors");
-
 const userRouter = require("./routes/userRoute");
 const categoryRouter = require("./routes/categoryRoute");
 const brandRouter = require("./routes/brandRoute");
@@ -11,7 +10,6 @@ const productRouter = require("./routes/productRoute");
 const addressRouter = require("./routes/addressRoute");
 const cardRouter = require("./routes/cardRoute");
 const pricingRouter = require("./routes/pricingRoute");
-const cors = require("cors");
 const { stripeWebhook } = require("./controllers/userController");
 
 // Stripe webhook requires raw body
