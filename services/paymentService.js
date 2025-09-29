@@ -71,6 +71,9 @@ const initializeStripeCheckout = async (amount, email, userId, successUrl, cance
     payment_method_types: ['card'],
     line_items: lineItems,
     mode: 'payment',
+    payment_intent_data: {
+      setup_future_usage: 'off_session', // 👈 ensures the card stays attached
+    },
     success_url: successUrl || `${process.env.FRONTEND_URL}/success?session_id={CHECKOUT_SESSION_ID}`,
     cancel_url: cancelUrl || `${process.env.FRONTEND_URL}/cancel`,
     metadata: {
@@ -116,20 +119,11 @@ const initializeStripePaymentWithSavedCard = async (amount, user, paymentMethodI
       customer: stripeCustomer.id, // Use proper customer ID
       payment_method: paymentMethodId,
       confirm: true,
-      automatic_payment_methods: {
-        enabled: true, // Enable automatic payment methods to reduce 3D Secure
-        allow_redirects: 'never', // Prevent redirects to minimize 3D Secure
-      },
-      setup_future_usage: 'off_session', // Don't setup for future use to avoid auth
-      capture_method: 'automatic', // Capture immediately
-      confirmation_method: 'automatic', // Try automatic confirmation first
-      // Options to minimize 3D Secure
+      capture_method: 'automatic',
+      payment_method_types: ['card'],
       payment_method_options: {
-        card: {
-          request_three_d_secure: 'automatic', // Only when required by regulation
-        },
+        card: { request_three_d_secure: 'automatic' },
       },
-      return_url: `${process.env.FRONTEND_URL}/order-confirmation`,
       metadata: {
         userId: user._id.toString(),
         userEmail: user.email,
@@ -192,7 +186,7 @@ const processSavedCardPayment = async ({ orderId, user, userCart, cardId, addres
         });
       }
 
-      const newOrder = await createNewOrder(
+      await createNewOrder(
         orderId,
         userCart.products,
         "card",
@@ -287,7 +281,7 @@ const processNewCheckoutSession = async ({ orderId, user, userCart, address, com
 // Helper function for cash payments
 const processCashOrder = async ({ orderId, user, userCart, address, comment, deliveryDate, deliveryTime, res }) => {
   const NotificationService = require('./notificationService');
-  
+
   try {
     const newOrder = await createNewOrder(
       orderId,
@@ -398,12 +392,14 @@ const createNewOrder = async (
 
 // Update product stock helper
 const updateProductStock = async (products) => {
-  const updateOperations = products.map((item) => ({
-    updateOne: {
-      filter: { _id: item.id },
-      update: { $inc: { stock: -item.count, sold: +item.count } },
-    },
-  }));
+  const updateOperations = products.map((item) => (
+
+    {
+      updateOne: {
+        filter: { _id: item.id },
+        update: { $inc: { stock: -item.count, sold: +item.count } },
+      },
+    }));
 
   await Product.bulkWrite(updateOperations, {});
 };
@@ -411,7 +407,7 @@ const updateProductStock = async (products) => {
 // Process Stripe webhook
 const processStripeWebhook = async (event) => {
   const NotificationService = require('./notificationService');
-  
+
   switch (event.type) {
     case 'checkout.session.completed':
       return await handleCheckoutSessionCompleted(event.data.object);
@@ -431,11 +427,12 @@ const processStripeWebhook = async (event) => {
 // Handle checkout session completed
 const handleCheckoutSessionCompleted = async (session) => {
   const NotificationService = require('./notificationService');
-  
+
   try {
     const order = await Order.findOne({ reference: session.id }).populate('orderBy');
     if (order) {
       // Update order status to Processing and mark as paid
+      if (order.orderStatus === 'Pending') {
       const updatedOrder = await Order.findByIdAndUpdate(
         { _id: order._id },
         {
@@ -453,30 +450,28 @@ const handleCheckoutSessionCompleted = async (session) => {
       if (userCart) {
         await updateProductStock(userCart.products);
         await Cart.deleteOne({ orderBy: order.orderBy });
+      } else {
+        console.log('Skipping stock update - order already processed:', order.orderStatus);
+      }
       }
     }
-
-
     if (session.payment_intent) {
       try {
         const paymentIntent = await stripe.paymentIntents.retrieve(session.payment_intent);
         const paymentMethodId = paymentIntent.payment_method;
 
-
         if (paymentMethodId) {
           const paymentMethod = await stripe.paymentMethods.retrieve(paymentMethodId);
-
-       
           let userId = null;
           if (session.metadata && session.metadata.userId) {
             userId = session.metadata.userId;
 
           } else {
-            // Fallback: get userId from the order
+
             const order = await Order.findOne({ reference: session.id });
             if (order) {
               userId = order.orderBy;
-
+              console.log('Using userId from order:', userId);
             }
           }
 
@@ -487,6 +482,13 @@ const handleCheckoutSessionCompleted = async (session) => {
             });
 
             if (!existingCard) {
+              if (session.customer) {
+                await stripe.paymentMethods.attach(paymentMethodId, {
+                  customer: session.customer,
+                });
+                console.log('Payment method attached to customer:', session.customer);
+              }
+
               // Create the card with proper validation
               const newCard = await Card.create({
                 paymentMethodId: paymentMethodId,
@@ -497,7 +499,9 @@ const handleCheckoutSessionCompleted = async (session) => {
                 expYear: paymentMethod.card.exp_year,
                 owner: userId,
               });
+              console.log('Card created successfully:', newCard._id);
             } else {
+              console.log('Card already exists for this payment method and user');
             }
           } else {
             console.log('Cannot create card - no userId found in metadata or order');
@@ -519,78 +523,36 @@ const handleCheckoutSessionCompleted = async (session) => {
 // Handle payment intent succeeded
 const handlePaymentIntentSucceeded = async (paymentIntent) => {
   const NotificationService = require('./notificationService');
-  
+
   try {
     const order = await Order.findOne({ reference: paymentIntent.id }).populate('orderBy');
     if (order) {
-      const updatedOrder = await Order.findByIdAndUpdate(
-        { _id: order._id },
-        {
-          orderStatus: 'Processing',
-          isPaid: true,
-          paidAt: new Date(),
-        },
-        { new: true }
-      ).populate('orderBy');
+      if (order.orderStatus === 'Pending') {
+        const updatedOrder = await Order.findByIdAndUpdate(
+          { _id: order._id },
+          {
+            orderStatus: 'Processing',
+            isPaid: true,
+            paidAt: new Date(),
+          },
+          { new: true }
+        ).populate('orderBy');
 
-      // Send admin notification for new order
-      await NotificationService.sendOrderNotificationToAdmin(updatedOrder, order.orderBy);
+        // Send admin notification for new order
+        await NotificationService.sendOrderNotificationToAdmin(updatedOrder, order.orderBy);
 
-      const userCart = await Cart.findOne({ orderBy: order.orderBy });
-      if (userCart) {
-        await updateProductStock(userCart.products);
-        await Cart.deleteOne({ orderBy: order.orderBy });
-      }
-    }
-
-
-    if (paymentIntent.payment_method) {
-      try {
-        const paymentMethod = await stripe.paymentMethods.retrieve(paymentIntent.payment_method);
-        const customerId = paymentIntent.customer_id;
-
-        let userId = paymentIntent.metadata?.userId;
-
-       
-        if (!userId && customerId) {
-          try {
-            const customer = await stripe.customers.retrieve(customerId);
-            userId = customer.metadata.userId;
-          } catch (customerError) {
-            console.error('Error retrieving customer:', customerError.message);
-          }
-        }
-
-       
-        if (!userId && order) {
-          userId = order.orderBy;
-        }
-
-        if (userId) {
-          const existingCard = await Card.findOne({
-            paymentMethodId: paymentIntent.payment_method,
-            owner: userId,
-          });
-
-          if (!existingCard) {
-            await Card.create({
-              paymentMethodId: paymentIntent.payment_method,
-              customerId: customerId,
-              last4: paymentMethod.card.last4,
-              brand: paymentMethod.card.brand,
-              expMonth: paymentMethod.card.exp_month,
-              expYear: paymentMethod.card.exp_year,
-              owner: userId,
-            });
-            console.log('Card saved for user:', userId);
-          }
+        const userCart = await Cart.findOne({ orderBy: order.orderBy });
+        if (userCart) {
+          await updateProductStock(userCart.products);
+          await Cart.deleteOne({ orderBy: order.orderBy });
         } else {
-          console.log('Cannot save card - no userId found in payment intent metadata, customer metadata, or order');
+          console.log('Skipping stock update - order already processed:', order.orderStatus);
         }
-      } catch (error) {
-        console.error('Error creating card record:', error);
       }
     }
+
+    // Note: Card creation is handled only in checkout.session.completed
+    // for new cards. Existing cards are already saved in the database.
   } catch (error) {
     console.error('Error processing payment intent:', error);
     throw error;
