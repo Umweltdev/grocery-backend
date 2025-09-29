@@ -1,8 +1,31 @@
-const mongoose = require("mongoose"); 
+const mongoose = require("mongoose");
 
 var cardSchema = new mongoose.Schema({
-  cardDetails: {},
-  owner: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+  paymentMethodId: {
+    type: String,
+    required: true,
+  },
+  customerId: {
+    type: String,
+  },
+  last4: {
+    type: String,
+  },
+  brand: {
+    type: String,
+    enum: ["visa", "mastercard", "amex", "discover", "diners", "jcb", "unionpay"],
+  },
+  expMonth: {
+    type: Number,
+  },
+  expYear: {
+    type: Number,
+  },
+  owner: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User",
+    required: true
+  },
 },
 { timestamps: true });
 
