@@ -31,7 +31,7 @@ const getOrCreateStripeCustomer = async (user) => {
 };
 
 const initializeStripeCheckout = async (amount, email, userId, successUrl, cancelUrl, cartItems = [], customerId = null) => {
-
+ 
   const lineItems = [];
 
   if (cartItems && cartItems.length > 0) {
@@ -53,7 +53,7 @@ const initializeStripeCheckout = async (amount, email, userId, successUrl, cance
       });
     });
   } else {
-
+ 
     lineItems.push({
       price_data: {
         currency: 'eur',
@@ -81,14 +81,14 @@ const initializeStripeCheckout = async (amount, email, userId, successUrl, cance
       itemCount: cartItems ? cartItems.length : 0,
       totalAmount: amount,
     },
-
+   
     payment_method_options: {
       card: {
         request_three_d_secure: 'automatic',
       },
     },
     automatic_tax: {
-      enabled: false,
+      enabled: false, 
     },
   };
 
@@ -170,7 +170,7 @@ const processSavedCardPayment = async ({ orderId, user, userCart, cardId, addres
 
     const stripePayment = await initializeStripePaymentWithSavedCard(
       userCart.cartTotal,
-      user,
+      user, 
       card.paymentMethodId
     );
 
@@ -178,7 +178,7 @@ const processSavedCardPayment = async ({ orderId, user, userCart, cardId, addres
     if (stripePayment.status === "succeeded") {
       const existingOrder = await Order.findOne({ orderId: orderId });
       if (existingOrder) {
-
+   
         return res.json({
           message: "Payment successful - order already processed",
           status: stripePayment.status,
@@ -200,7 +200,7 @@ const processSavedCardPayment = async ({ orderId, user, userCart, cardId, addres
         stripePayment.paymentIntentId
       );
 
-
+  
       user.orderCount += 1;
       await user.save();
 
@@ -213,7 +213,7 @@ const processSavedCardPayment = async ({ orderId, user, userCart, cardId, addres
         orderId: orderId,
       });
     } else {
-
+    
       return res.status(400).json({
         error: "Payment failed",
         details: stripePayment.error || "Unknown error",
@@ -232,7 +232,7 @@ const processSavedCardPayment = async ({ orderId, user, userCart, cardId, addres
 // Process new checkout session
 const processNewCheckoutSession = async ({ orderId, user, userCart, address, comment, deliveryDate, deliveryTime, res }) => {
   try {
-
+  
     const stripeCustomer = await getOrCreateStripeCustomer(user);
 
     const stripePayment = await initializeStripeCheckout(
@@ -241,10 +241,10 @@ const processNewCheckoutSession = async ({ orderId, user, userCart, address, com
       user._id,
       null,
       null,
-      userCart.products,
-      stripeCustomer.id
+      userCart.products, 
+      stripeCustomer.id 
     );
-
+   
     const newOrder = await createNewOrder(
       orderId,
       userCart.products,
@@ -259,11 +259,11 @@ const processNewCheckoutSession = async ({ orderId, user, userCart, address, com
       stripePayment.sessionId
     );
 
-
+  
     user.orderCount += 1;
     await user.save();
 
-
+   
     return res.json({
       message: "Redirect to payment",
       checkoutUrl: stripePayment.url,
@@ -333,7 +333,7 @@ const processCardOrder = async ({ orderId, user, userCart, cardId, address, comm
       });
     }
 
-
+  
     return await processNewCheckoutSession({
       orderId,
       user,
@@ -465,9 +465,8 @@ const handleCheckoutSessionCompleted = async (session) => {
           let userId = null;
           if (session.metadata && session.metadata.userId) {
             userId = session.metadata.userId;
-
+          
           } else {
-
             const order = await Order.findOne({ reference: session.id });
             if (order) {
               userId = order.orderBy;
