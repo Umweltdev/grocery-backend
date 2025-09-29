@@ -10,21 +10,22 @@ const validateMongoDbId = require("../utils/validateMongodbId");
 const sendEmail = require("./emailContoller");
 const { v4: uuidv4 } = require("uuid");
 const { cloudinaryDeleteImg } = require("../utils/cloudinary");
-const axios = require("axios");
+const Stripe = require("stripe");
+const PricingService = require("../utils/pricingService");
+const {
+  processCashOrder,
+  processCardOrder,
+  processStripeWebhook,
+} = require("../services/paymentService");
+const NotificationService = require("../services/notificationService");
 
-if (!process.env.PAYSTACK_SECRET_KEY) {
-  console.error("PAYSTACK_SECRET_KEY is missing in env");
-  throw new Error("Missing Paystack secret key");
+
+if (!process.env.STRIPE_SECRET_KEY) {
+  console.error("STRIPE_SECRET_KEY is missing in env");
+  throw new Error("Missing Stripe secret key");
 }
 
-const paystack = axios.create({
-  baseURL: "https://api.paystack.co",
-  headers: {
-    Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
-    "Content-Type": "application/json",
-  },
-  timeout: 10000,
-});
+const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 const createUser = asyncHandler(async (req, res) => {
   const email = req.body.email;
@@ -135,7 +136,7 @@ const updatedUserProfile = asyncHandler(async (req, res) => {
     const updateObject = { ...req.body };
     if (req.images && req.images.length > 0) {
       updateObject.image = req.images[0];
-      if(user.image && user.image.public_id) {
+      if (user.image && user.image.public_id) {
         await cloudinaryDeleteImg(user.image.public_id);
       }
     }
@@ -220,7 +221,7 @@ const deleteAUser = asyncHandler(async (req, res) => {
 const getWishlist = asyncHandler(async (req, res) => {
   const { _id } = req.user;
   try {
-    const findUser = await User.findById({_id}, 'wishlist').populate("wishlist");
+    const findUser = await User.findById({ _id }, 'wishlist').populate("wishlist");
     res.json(findUser);
   } catch (error) {
     throw new Error(error);
@@ -247,7 +248,7 @@ const userCart = asyncHandler(async (req, res) => {
       products.push({
         id: cart[i].id,
         count: cart[i].count,
-        price: product.salePrice || product.regularPrice,
+        price: (await PricingService.calculateFinalPrice(product.regularPrice, _id)).basePrice,
         name: product.name,
         image: cart[i].image,
       });
@@ -319,124 +320,72 @@ const emptyCart = asyncHandler(async (req, res) => {
 
 const createOrder = asyncHandler(async (req, res) => {
   const {
-    paymentMethod,
+    paymentMethod = 'card',
     address,
     deliveryDate,
     deliveryTime,
     comment,
     cardId,
   } = req.body;
+
   const { _id } = req.user;
   validateMongoDbId(_id);
-  let orderStatus;
+
+  // Validate payment method
   const validPaymentMethods = ["cash", "card"];
-  if (!validPaymentMethods.includes(paymentMethod))
-    return res.status(400).json({ error: "Invalid payment method" });
-
-  if (paymentMethod === "cash") {
-    orderStatus = "Processing";
-  } else if (paymentMethod === "card") {
-    try {
-      const user = await User.findById(_id);
-      const userCart = await Cart.findOne({ orderBy: user._id });
-      const orderId = uuidv4();
-      let paystackPayment;
-
-      if (cardId) {
-        const card = await Card.findById(cardId);
-        if (!card) {
-          return res.status(404).json({ error: "Card not found" });
-        }
-        paystackPayment = await initializePaystackCheckoutWithCard(
-          userCart.cartTotal,
-          user.email,
-          card.cardDetails.authorization_code
-        );
-
-        if (paystackPayment.status === "success") {
-          await createNewOrder(
-            orderId,
-            userCart.products,
-            paymentMethod,
-            userCart.cartTotal,
-            user._id,
-            "Processing",
-            address,
-            comment,
-            deliveryDate,
-            deliveryTime,
-            paystackPayment.reference
-          );
-          user.orderCount += 1;
-          await user.save();
-          await updateProductStock(userCart.products);
-          await Cart.deleteOne({ orderBy: user._id });
-          return res.json({
-            message: "success",
-            status: paystackPayment.status,
-          });
-        } else {
-          // Payment was not successful
-          return res.status(400).json({ error: "Payment failed" });
-        }
-      } else {
-        paystackPayment = await initializePaystackCheckout(
-          userCart.cartTotal,
-          user.email,
-          user._id
-        );
-        await createNewOrder(
-          orderId,
-          userCart.products,
-          paymentMethod,
-          userCart.cartTotal,
-          user._id,
-          "Processing",
-          address,
-          comment,
-          deliveryDate,
-          deliveryTime,
-          paystackPayment.reference
-        );
-        user.orderCount += 1;
-        await user.save();
-        await updateProductStock(userCart.products);
-        await Cart.deleteOne({ orderBy: user._id });
-        return res.json({
-          message: "success",
-          authorizationUrl: paystackPayment.authorizationUrl,
-        });
-      }
-    } catch (error) {
-      throw new Error(error);
-    }
+  if (!validPaymentMethods.includes(paymentMethod)) {
+    return res.status(400).json({ error: "Invalid payment method. Must be 'cash' or 'card'" });
   }
+
   try {
+    // Get user and cart
     const user = await User.findById(_id);
-    let userCart = await Cart.findOne({ orderBy: user._id });
-    let finalAmout = userCart.cartTotal;
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const userCart = await Cart.findOne({ orderBy: user._id });
+    if (!userCart || userCart.products.length === 0) {
+      return res.status(400).json({ error: "Cart is empty or not found" });
+    }
+
     const orderId = uuidv4();
-    await createNewOrder(
+
+    if (paymentMethod === "cash") {
+      return await processCashOrder({
+        orderId,
+        user,
+        userCart,
+        address,
+        comment,
+        deliveryDate,
+        deliveryTime,
+        res
+      });
+    }
+
+
+    return await processCardOrder({
       orderId,
-      userCart.products,
-      paymentMethod,
-      userCart.cartTotal,
-      user._id,
-      orderStatus,
+      user,
+      userCart,
+      cardId,
       address,
       comment,
       deliveryDate,
-      deliveryTime
-    );
-    user.orderCount += 1;
-    await user.save();
-    await updateProductStock(userCart.products);
-    await Cart.deleteOne({ orderBy: user._id });
-    res.json({ message: "success" });
+      deliveryTime,
+      res
+    });
+
   } catch (error) {
-    throw new Error(error);
+    console.error('Create order error:', error);
+    return res.status(500).json({ error: "Failed to create order", details: error.message });
   }
 });
+
+
+
+
 
 const getUserOrders = asyncHandler(async (req, res) => {
   const { _id } = req.user;
@@ -472,7 +421,14 @@ const getOrderById = asyncHandler(async (req, res) => {
 
 const getAllOrders = asyncHandler(async (req, res) => {
   try {
-    const alluserorders = await Order.find().populate("address").exec();
+    const alluserorders = await Order.find()
+      .populate("address")
+      .populate({
+        path: "orderBy",
+        select: "email fullName"
+      })
+      .exec();
+    console.log("Sample order with user data:", JSON.stringify(alluserorders[0], null, 2));
     res.json(alluserorders);
   } catch (error) {
     throw new Error(error);
@@ -498,58 +454,48 @@ const updateOrderStatus = asyncHandler(async (req, res) => {
   const { id } = req.params;
   validateMongoDbId(id);
   try {
-    const updateOrderStatus = await Order.findByIdAndUpdate(
+    const order = await Order.findById(id).populate('orderBy');
+    const updatedOrder = await Order.findByIdAndUpdate(
       id,
       {
         orderStatus,
         isPaid,
       },
       { new: true }
-    );
-    res.json(updateOrderStatus);
+    ).populate('orderBy');
+    
+    // Send email notification to customer based on status change
+    if (order.orderStatus !== orderStatus) {
+      await NotificationService.sendOrderStatusUpdateToCustomer(updatedOrder, orderStatus);
+    }
+    
+    res.json(updatedOrder);
   } catch (error) {
     throw new Error(error);
   }
 });
 
-const paystackWebhook = asyncHandler(async (req, res) => {
-  const secret = "sk_test_72f9b6cb1cf752a0ddd3d696e2c592849ff81a12";
-  const hash = req.headers["x-paystack-signature"];
-  const hmac = crypto.createHmac("sha512", secret);
-  hmac.update(JSON.stringify(req.body));
-  const digest = hmac.digest("hex");
-  if (digest !== hash) {
-    console.error("Invalid webhook signature");
-    res.status(400).send("Invalid signature");
-    return;
+const stripeWebhook = asyncHandler(async (req, res) => {
+  const sig = req.headers['stripe-signature'];
+  const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
+  let event;
+
+  try {
+    event = stripe.webhooks.constructEvent(req.body, sig, endpointSecret);
+  } catch (err) {
+    console.error('Webhook signature verification failed:', err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
   }
-  const event = req.body.event;
-  const data = req.body.data;
-  if (event === "charge.success") {
-    const paymentReference = data.reference;
-    try {
-      const order = await Order.findOne({ reference: paymentReference });
-      await Order.findByIdAndUpdate(
-        { _id: order._id },
-        {
-          isPaid: true,
-        },
-        { new: true }
-      );
-      const existingCard = await Card.findOne({
-        "cardDetails.authorization_code": data.authorization.authorization_code,
-      });
-      if (!existingCard) {
-        await Card.create({
-          cardDetails: data.authorization,
-          owner: data.metadata.userId,
-        });
-      }
-    } catch (error) {
-      throw new Error(error);
-    }
+
+  // Handle the event using payment service
+  try {
+    await processStripeWebhook(event);
+  } catch (error) {
+    console.error('Error processing webhook event:', error);
   }
-  res.sendStatus(200);
+
+  res.json({ received: true });
 });
 
 module.exports = {
@@ -573,82 +519,5 @@ module.exports = {
   getOrdersByUserId,
   getUserOrders,
   updateOrderStatus,
-  paystackWebhook,
-};
-
-async function initializePaystackCheckout(amount, email, userId) {
-  const { data } = await paystack.post("/transaction/initialize", {
-    email: email,
-    amount: amount * 100,
-    channels: ["card"],
-    metadata: {
-      userId: userId,
-    },
-  });
-
-  return {
-    authorizationUrl: data.data.authorization_url,
-    reference: data.data.reference,
-  };
-}
-
-async function initializePaystackCheckoutWithCard(
-  amount,
-  email,
-  authorization_code
-) {
-  const { data } = await paystack.post("/transaction/charge_authorization", {
-    email: email,
-    amount: amount * 100,
-    authorization_code: authorization_code,
-  });
-
-  return {
-    reference: data.data.reference,
-    status: data.data.status,
-  };
-}
-
-const createNewOrder = async (
-  orderId,
-  products,
-  paymentMethod,
-  totalPrice,
-  userId,
-  orderStatus,
-  address,
-  comment,
-  deliveryDate,
-  deliveryTime,
-  reference
-) => {
-  return new Order({
-    orderId,
-    products: products.map((product) => ({
-      product: product.id,
-      price: product.price,
-      count: product.count,
-      image: product.image,
-    })),
-    paymentMethod,
-    totalPrice,
-    orderBy: userId,
-    orderStatus,
-    address,
-    comment,
-    deliveryDate,
-    deliveryTime,
-    reference,
-  }).save();
-};
-
-const updateProductStock = async (products) => {
-  const updateOperations = products.map((item) => ({
-    updateOne: {
-      filter: { _id: item.id },
-      update: { $inc: { stock: -item.count, sold: +item.count } },
-    },
-  }));
-
-  await Product.bulkWrite(updateOperations, {});
+  stripeWebhook,
 };
