@@ -62,7 +62,7 @@ class NotificationService {
                 
                 <div style="text-align: center; background-color: #E3364E; color: white; padding: 20px; border-radius: 12px; margin-bottom: 30px;">
                   <h3 style="margin: 0 0 10px; font-size: 16px;">Total Amount</h3>
-                  <div style="font-size: 32px; font-weight: 700;">₦${order.totalPrice.toLocaleString()}</div>
+                  <div style="font-size: 32px; font-weight: 700;">€${order.totalPrice.toLocaleString()}</div>
                 </div>
                 
                 <div style="text-align: center;">
@@ -73,6 +73,7 @@ class NotificationService {
               
               <!-- Footer -->
               <div style="background-color: #f8f9fa; padding: 20px; text-align: center; border-top: 1px solid #e9ecef;">
+              <img src="https://res.cloudinary.com/dw7khzaml/image/upload/v1759145462/kaka_jgrgqz.png" alt="Logo" style="width: 200px; height: auto;margin-top: 15px; object-fit: contain;" />
                 <p style="color: #6c757d; margin: 0; font-size: 14px;">© 2024 Grocery Store. All rights reserved.</p>
               </div>
             </div>
@@ -136,9 +137,9 @@ class NotificationService {
             <body style="margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f8f9fa;">
               <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
                 <!-- Header -->
-                <div style="background: linear-gradient(135deg, #E3364E 0%, #c62d47 100%); padding: 30px 20px; text-align: center;">
+                <div style="background: padding: 30px 20px; text-align: center;">
                   <div style="background-color: white; width: 60px; height: 60px; border-radius: 12px; margin: 0 auto 20px; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
-                    <img src="cid:logo" alt="Logo" style="width: 40px; height: 40px; object-fit: contain;" />
+                    <img src="https://res.cloudinary.com/dw7khzaml/image/upload/v1759145462/kaka_jgrgqz.png" alt="Logo" style="width: 200px; height: auto; object-fit: contain;" />
                   </div>
                   <h1 style="color: white; margin: 0; font-size: 24px; font-weight: 600;">Order Update</h1>
                   <p style="color: rgba(255,255,255,0.9); margin: 10px 0 0; font-size: 16px;">Hi ${
@@ -185,7 +186,7 @@ class NotificationService {
                       </div>
                       <div style="display: flex; justify-content: space-between; padding-top: 15px; border-top: 1px solid #e9ecef;">
                         <span style="color: #6c757d; font-weight: 500;">Total Amount:</span>
-                        <span style="color: #E3364E; font-weight: 700; font-size: 18px;">₦${order.totalPrice.toLocaleString()}</span>
+                        <span style="color: #E3364E; font-weight: 700; font-size: 18px;">€${order.totalPrice.toLocaleString()}</span>
                       </div>
                     </div>
                   </div>
@@ -199,6 +200,7 @@ class NotificationService {
                 
                 <!-- Footer -->
                 <div style="background-color: #f8f9fa; padding: 30px 20px; text-align: center; border-top: 1px solid #e9ecef;">
+                 <img src="https://res.cloudinary.com/dw7khzaml/image/upload/v1759145462/kaka_jgrgqz.png" alt="Logo" style="width: 200px; height: auto; margin-top: 15px; object-fit: contain;" />
                   <p style="color: #2c3e50; margin: 0 0 15px; font-size: 16px; font-weight: 600;">Thank you for choosing us! 🙏</p>
                   <p style="color: #6c757d; margin: 0 0 20px; font-size: 14px; line-height: 1.6;">We appreciate your business and hope you love your purchase. If you have any questions, our support team is here to help.</p>
                   <div style="border-top: 1px solid #e9ecef; padding-top: 20px;">

@@ -42,7 +42,7 @@ const initializeStripeCheckout = async (amount, email, userId, successUrl, cance
 
       lineItems.push({
         price_data: {
-          currency: 'usd',
+          currency: 'eur',
           product_data: {
             name: item.name || 'Product',
             description: `Quantity: ${quantity} × $${(item.price || 0).toFixed(2)} each`,
@@ -56,7 +56,7 @@ const initializeStripeCheckout = async (amount, email, userId, successUrl, cance
 
     lineItems.push({
       price_data: {
-        currency: 'usd',
+        currency: 'eur',
         product_data: {
           name: 'Order Payment',
           description: 'Complete your purchase',
@@ -112,7 +112,7 @@ const initializeStripePaymentWithSavedCard = async (amount, user, paymentMethodI
 
     const paymentIntent = await stripe.paymentIntents.create({
       amount: Math.round(amount * 100),
-      currency: 'usd',
+      currency: 'eur',
       customer: stripeCustomer.id, // Use proper customer ID
       payment_method: paymentMethodId,
       confirm: true,
@@ -286,8 +286,9 @@ const processNewCheckoutSession = async ({ orderId, user, userCart, address, com
 
 // Helper function for cash payments
 const processCashOrder = async ({ orderId, user, userCart, address, comment, deliveryDate, deliveryTime, res }) => {
+  const NotificationService = require('./notificationService');
+  
   try {
-
     const newOrder = await createNewOrder(
       orderId,
       userCart.products,
@@ -301,10 +302,11 @@ const processCashOrder = async ({ orderId, user, userCart, address, comment, del
       deliveryTime
     );
 
+    // Send admin notification for new cash order
+    await NotificationService.sendOrderNotificationToAdmin(newOrder, user);
 
     user.orderCount += 1;
     await user.save();
-
 
     await updateProductStock(userCart.products);
     await Cart.deleteOne({ orderBy: user._id });
@@ -408,6 +410,8 @@ const updateProductStock = async (products) => {
 
 // Process Stripe webhook
 const processStripeWebhook = async (event) => {
+  const NotificationService = require('./notificationService');
+  
   switch (event.type) {
     case 'checkout.session.completed':
       return await handleCheckoutSessionCompleted(event.data.object);
@@ -426,11 +430,13 @@ const processStripeWebhook = async (event) => {
 
 // Handle checkout session completed
 const handleCheckoutSessionCompleted = async (session) => {
+  const NotificationService = require('./notificationService');
+  
   try {
-    const order = await Order.findOne({ reference: session.id });
+    const order = await Order.findOne({ reference: session.id }).populate('orderBy');
     if (order) {
       // Update order status to Processing and mark as paid
-      await Order.findByIdAndUpdate(
+      const updatedOrder = await Order.findByIdAndUpdate(
         { _id: order._id },
         {
           orderStatus: 'Processing',
@@ -438,8 +444,10 @@ const handleCheckoutSessionCompleted = async (session) => {
           paidAt: new Date(),
         },
         { new: true }
-      );
+      ).populate('orderBy');
 
+      // Send admin notification for new order
+      await NotificationService.sendOrderNotificationToAdmin(updatedOrder, order.orderBy);
 
       const userCart = await Cart.findOne({ orderBy: order.orderBy });
       if (userCart) {
@@ -510,11 +518,12 @@ const handleCheckoutSessionCompleted = async (session) => {
 
 // Handle payment intent succeeded
 const handlePaymentIntentSucceeded = async (paymentIntent) => {
+  const NotificationService = require('./notificationService');
+  
   try {
-    const order = await Order.findOne({ reference: paymentIntent.id });
+    const order = await Order.findOne({ reference: paymentIntent.id }).populate('orderBy');
     if (order) {
-
-      await Order.findByIdAndUpdate(
+      const updatedOrder = await Order.findByIdAndUpdate(
         { _id: order._id },
         {
           orderStatus: 'Processing',
@@ -522,8 +531,10 @@ const handlePaymentIntentSucceeded = async (paymentIntent) => {
           paidAt: new Date(),
         },
         { new: true }
-      );
+      ).populate('orderBy');
 
+      // Send admin notification for new order
+      await NotificationService.sendOrderNotificationToAdmin(updatedOrder, order.orderBy);
 
       const userCart = await Cart.findOne({ orderBy: order.orderBy });
       if (userCart) {
