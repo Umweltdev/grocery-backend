@@ -74,8 +74,8 @@ const initializeStripeCheckout = async (amount, email, userId, successUrl, cance
     payment_intent_data: {
       setup_future_usage: 'off_session', // 👈 ensures the card stays attached
     },
-    success_url: successUrl || `${process.env.FRONTEND_URL}/success?session_id={CHECKOUT_SESSION_ID}`,
-    cancel_url: cancelUrl || `${process.env.FRONTEND_URL}/cancel`,
+    success_url: successUrl || `${process.env.FRONTEND_URL}/checkout-success`,
+    cancel_url: cancelUrl || `${process.env.FRONTEND_URL}/checkout-cancel`,
     metadata: {
       userId: userId.toString(),
       itemCount: cartItems ? cartItems.length : 0,
