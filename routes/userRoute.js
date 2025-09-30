@@ -21,9 +21,8 @@ const {
   getOrderById,
   getOrdersByUserId,
   getUserOrders,
-  updateOrderStatus,
-  paystackWebhook
-  
+  updateOrderStatus
+
 } = require("../controllers/userController");
 const { authMiddleware, isAdmin } = require("../middlewares/auth");
 
@@ -31,7 +30,6 @@ const router = express.Router();
 router.post("/register", createUser);
 router.post("/login", login);
 router.post("/forgot-password", forgotPasswordToken);
-router.post("/paystack-webhook", paystackWebhook)
 router.put("/reset-password/:token", resetPassword);
 router.get("/", authMiddleware, getLoggedInUserProfile);
 router.put("/", authMiddleware, Multer.single("image"), uploadImages, updatedUserProfile);
