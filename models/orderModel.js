@@ -75,6 +75,26 @@ const orderSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: "User",
   },
+    deliveryFee: {
+    type: Number,
+    default: 0
+  },
+  deliveryDistance: {
+    type: Number
+  },
+  deliveryType: {
+    type: String,
+    enum: ['delivery', 'collection'],
+    default: 'delivery'
+  },
+  isEligibleForDelivery: {
+    type: Boolean,
+    default: true
+  },
+  totalPriceWithDelivery: {
+    type: Number,
+    required: true
+  }
 });
 
 module.exports = mongoose.model("Order", orderSchema);

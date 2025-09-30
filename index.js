@@ -11,6 +11,7 @@ const productRouter = require("./routes/productRoute");
 const addressRouter = require("./routes/addressRoute");
 const cardRouter = require("./routes/cardRoute");
 const pricingRouter = require("./routes/pricingRoute");
+const deliveryRouter = require("./routes/deliveryRoute");
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -47,6 +48,7 @@ app.use("/api/product", productRouter);
 app.use("/api/address", addressRouter);
 app.use("/api/card", cardRouter);
 app.use("/api/pricing", pricingRouter);
+app.use("api/delivery", deliveryRouter)
 
 app.use(notFound);
 app.use(errorHandler);

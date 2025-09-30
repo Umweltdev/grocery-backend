@@ -10,6 +10,7 @@ const validateMongoDbId = require("../utils/validateMongodbId");
 const sendEmail = require("./emailContoller");
 const { v4: uuidv4 } = require("uuid");
 const { cloudinaryDeleteImg } = require("../utils/cloudinary");
+const { calculateDeliveryFee } = require("../utils/deliveryCalculator");
 const axios = require("axios");
 
 if (!process.env.PAYSTACK_SECRET_KEY) {
@@ -328,113 +329,184 @@ const createOrder = asyncHandler(async (req, res) => {
   } = req.body;
   const { _id } = req.user;
   validateMongoDbId(_id);
+  
   let orderStatus;
   const validPaymentMethods = ["cash", "card"];
   if (!validPaymentMethods.includes(paymentMethod))
     return res.status(400).json({ error: "Invalid payment method" });
 
-  if (paymentMethod === "cash") {
-    orderStatus = "Processing";
-  } else if (paymentMethod === "card") {
-    try {
-      const user = await User.findById(_id);
-      const userCart = await Cart.findOne({ orderBy: user._id });
-      const orderId = uuidv4();
-      let paystackPayment;
+  try {
+    const user = await User.findById(_id);
+    const userCart = await Cart.findOne({ orderBy: user._id });
+    
+    if (!userCart || userCart.products.length === 0) {
+      return res.status(400).json({ error: "Cart is empty" });
+    }
 
-      if (cardId) {
-        const card = await Card.findById(cardId);
-        if (!card) {
-          return res.status(404).json({ error: "Card not found" });
-        }
-        paystackPayment = await initializePaystackCheckoutWithCard(
-          userCart.cartTotal,
-          user.email,
-          card.cardDetails.authorization_code
-        );
+    const orderId = uuidv4();
 
-        if (paystackPayment.status === "success") {
+    // Calculate delivery fee
+    const ORIGIN_ADDRESS = process.env.STORE_ADDRESS || "Your Store Address, City, Country";
+    const destinationAddressDoc = await Address.findById(address);
+    
+    if (!destinationAddressDoc) {
+      return res.status(404).json({ error: "Delivery address not found" });
+    }
+
+    const destinationAddress = `${destinationAddressDoc.address}, ${destinationAddressDoc.state}, ${destinationAddressDoc.country}`;
+    
+    const deliveryInfo = await calculateDeliveryFee(ORIGIN_ADDRESS, destinationAddress);
+
+    const totalPriceWithDelivery = userCart.cartTotal + deliveryInfo.deliveryFee;
+
+    // Payment processing logic
+    if (paymentMethod === "card") {
+      try {
+        let paystackPayment;
+
+        if (cardId) {
+          // Payment with saved card
+          const card = await Card.findById(cardId);
+          if (!card) {
+            return res.status(404).json({ error: "Card not found" });
+          }
+          
+          paystackPayment = await initializePaystackCheckoutWithCard(
+            totalPriceWithDelivery,
+            user.email,
+            card.cardDetails.authorization_code
+          );
+
+          if (paystackPayment.status === "success") {
+            await createNewOrder(
+              orderId,
+              userCart.products,
+              paymentMethod,
+              userCart.cartTotal,
+              totalPriceWithDelivery,
+              user._id,
+              "Processing",
+              address,
+              comment,
+              deliveryDate,
+              deliveryTime,
+              deliveryInfo.deliveryFee,
+              deliveryInfo.distance,
+              deliveryInfo.deliveryType,
+              paystackPayment.reference
+            );
+
+            user.orderCount += 1;
+            user.totalSpend += totalPriceWithDelivery;
+            await user.save();
+            await updateProductStock(userCart.products);
+            await Cart.deleteOne({ orderBy: user._id });
+            
+            return res.json({
+              message: "success",
+              status: paystackPayment.status,
+              orderId: orderId,
+              deliveryFee: deliveryInfo.deliveryFee,
+              distance: deliveryInfo.distance,
+              cartTotal: userCart.cartTotal,
+              totalPriceWithDelivery: totalPriceWithDelivery,
+              deliveryType: deliveryInfo.deliveryType,
+              calculation: deliveryInfo.calculation
+            });
+          } else {
+            return res.status(400).json({ error: "Payment failed" });
+          }
+        } else {
+          // New card payment - initialize checkout
+          paystackPayment = await initializePaystackCheckout(
+            totalPriceWithDelivery,
+            user.email,
+            user._id
+          );
+
           await createNewOrder(
             orderId,
             userCart.products,
             paymentMethod,
             userCart.cartTotal,
+            totalPriceWithDelivery,
             user._id,
-            "Processing",
+            "Pending",
             address,
             comment,
             deliveryDate,
             deliveryTime,
+            deliveryInfo.deliveryFee,
+            deliveryInfo.distance,
+            deliveryInfo.deliveryType,
             paystackPayment.reference
           );
+
           user.orderCount += 1;
           await user.save();
           await updateProductStock(userCart.products);
           await Cart.deleteOne({ orderBy: user._id });
+          
           return res.json({
             message: "success",
-            status: paystackPayment.status,
+            authorizationUrl: paystackPayment.authorizationUrl,
+            orderId: orderId,
+            deliveryFee: deliveryInfo.deliveryFee,
+            distance: deliveryInfo.distance,
+            cartTotal: userCart.cartTotal,
+            totalPriceWithDelivery: totalPriceWithDelivery,
+            deliveryType: deliveryInfo.deliveryType,
+            calculation: deliveryInfo.calculation
           });
-        } else {
-          // Payment was not successful
-          return res.status(400).json({ error: "Payment failed" });
         }
-      } else {
-        paystackPayment = await initializePaystackCheckout(
-          userCart.cartTotal,
-          user.email,
-          user._id
-        );
-        await createNewOrder(
-          orderId,
-          userCart.products,
-          paymentMethod,
-          userCart.cartTotal,
-          user._id,
-          "Processing",
-          address,
-          comment,
-          deliveryDate,
-          deliveryTime,
-          paystackPayment.reference
-        );
-        user.orderCount += 1;
-        await user.save();
-        await updateProductStock(userCart.products);
-        await Cart.deleteOne({ orderBy: user._id });
-        return res.json({
-          message: "success",
-          authorizationUrl: paystackPayment.authorizationUrl,
-        });
+      } catch (paymentError) {
+        console.error("Payment error:", paymentError);
+        return res.status(400).json({ error: "Payment processing failed" });
       }
-    } catch (error) {
-      throw new Error(error);
     }
-  }
-  try {
-    const user = await User.findById(_id);
-    let userCart = await Cart.findOne({ orderBy: user._id });
-    let finalAmout = userCart.cartTotal;
-    const orderId = uuidv4();
-    await createNewOrder(
-      orderId,
-      userCart.products,
-      paymentMethod,
-      userCart.cartTotal,
-      user._id,
-      orderStatus,
-      address,
-      comment,
-      deliveryDate,
-      deliveryTime
-    );
-    user.orderCount += 1;
-    await user.save();
-    await updateProductStock(userCart.products);
-    await Cart.deleteOne({ orderBy: user._id });
-    res.json({ message: "success" });
+
+    // Cash on Delivery payment
+    if (paymentMethod === "cash") {
+      orderStatus = "Processing";
+      
+      await createNewOrder(
+        orderId,
+        userCart.products,
+        paymentMethod,
+        userCart.cartTotal,
+        totalPriceWithDelivery,
+        user._id,
+        orderStatus,
+        address,
+        comment,
+        deliveryDate,
+        deliveryTime,
+        deliveryInfo.deliveryFee,
+        deliveryInfo.distance,
+        deliveryInfo.deliveryType
+      );
+
+      user.orderCount += 1;
+      user.totalSpend += totalPriceWithDelivery;
+      await user.save();
+      await updateProductStock(userCart.products);
+      await Cart.deleteOne({ orderBy: user._id });
+      
+      res.json({
+        message: "success",
+        orderId: orderId,
+        deliveryFee: deliveryInfo.deliveryFee,
+        distance: deliveryInfo.distance,
+        cartTotal: userCart.cartTotal,
+        totalPriceWithDelivery: totalPriceWithDelivery,
+        deliveryType: deliveryInfo.deliveryType,
+        calculation: deliveryInfo.calculation
+      });
+    }
+
   } catch (error) {
-    throw new Error(error);
+    console.error("Create order error:", error);
+    res.status(500).json({ error: "Failed to create order" });
   }
 });
 
@@ -513,7 +585,7 @@ const updateOrderStatus = asyncHandler(async (req, res) => {
 });
 
 const paystackWebhook = asyncHandler(async (req, res) => {
-  const secret = "sk_test_72f9b6cb1cf752a0ddd3d696e2c592849ff81a12";
+  const secret = process.env.PAYSTACK_SECRET_KEY;
   const hash = req.headers["x-paystack-signature"];
   const hmac = crypto.createHmac("sha512", secret);
   hmac.update(JSON.stringify(req.body));
@@ -579,7 +651,7 @@ module.exports = {
 async function initializePaystackCheckout(amount, email, userId) {
   const { data } = await paystack.post("/transaction/initialize", {
     email: email,
-    amount: amount * 100,
+    amount: Math.round(amount * 100),
     channels: ["card"],
     metadata: {
       userId: userId,
@@ -614,13 +686,17 @@ const createNewOrder = async (
   products,
   paymentMethod,
   totalPrice,
+  totalPriceWithDelivery,
   userId,
   orderStatus,
   address,
   comment,
   deliveryDate,
   deliveryTime,
-  reference
+  deliveryFee = 0,
+  deliveryDistance = 0,
+  deliveryType = 'delivery',
+  reference = null
 ) => {
   return new Order({
     orderId,
@@ -632,16 +708,19 @@ const createNewOrder = async (
     })),
     paymentMethod,
     totalPrice,
+    totalPriceWithDelivery,
     orderBy: userId,
     orderStatus,
     address,
     comment,
     deliveryDate,
     deliveryTime,
+    deliveryFee,
+    deliveryDistance,
+    deliveryType,
     reference,
   }).save();
 };
-
 const updateProductStock = async (products) => {
   const updateOperations = products.map((item) => ({
     updateOne: {
