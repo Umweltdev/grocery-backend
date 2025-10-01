@@ -52,11 +52,38 @@ const createUser = asyncHandler(async (req, res) => {
 // Login a user
 const login = asyncHandler(async (req, res) => {
   const { emailOrPhone, password } = req.body;
+  
+  // Trim whitespace and validate inputs
+  const cleanEmailOrPhone = emailOrPhone?.trim();
+  const cleanPassword = password?.trim();
+  
+  console.log('Login attempt:', { 
+    emailOrPhone: cleanEmailOrPhone, 
+    passwordLength: cleanPassword?.length,
+    hasWhitespace: password !== cleanPassword
+  });
+  
+  if (!cleanEmailOrPhone || !cleanPassword) {
+    res.status(400);
+    throw new Error("Email/Phone and password are required");
+  }
+  
   // check if user exists or not
   const findUser = await User.findOne({
-    $or: [{ email: emailOrPhone }, { phone: emailOrPhone }],
+    $or: [{ email: cleanEmailOrPhone.toLowerCase() }, { phone: cleanEmailOrPhone }],
   });
-  if (findUser && (await findUser.isPasswordMatched(password))) {
+  
+  console.log('User found:', findUser ? 'Yes' : 'No');
+  if (findUser) {
+    console.log('Stored password hash:', findUser.password?.substring(0, 10) + '...');
+    console.log('Password comparison details:', {
+      inputLength: cleanPassword.length,
+      hashLength: findUser.password?.length,
+      inputFirstChars: cleanPassword.substring(0, 5) + '...',
+    });
+  }
+  
+  if (findUser && (await findUser.isPasswordMatched(cleanPassword))) {
     res.json({
       _id: findUser?._id,
       fullName: findUser?.fullName,
@@ -69,6 +96,19 @@ const login = asyncHandler(async (req, res) => {
       token: generateToken(findUser?._id),
     });
   } else {
+    const passwordMatch = findUser ? await findUser.isPasswordMatched(cleanPassword) : false;
+    console.log('Login failed - User found:', !!findUser, 'Password match:', passwordMatch);
+    
+    // Additional debugging for password issues
+    if (findUser && !passwordMatch) {
+      console.log('Password debugging:', {
+        originalPassword: `"${password}"`,
+        cleanedPassword: `"${cleanPassword}"`,
+        passwordsEqual: password === cleanPassword,
+        inputHasSpecialChars: /[^a-zA-Z0-9]/.test(cleanPassword)
+      });
+    }
+    
     res.status(401);
     throw new Error("Invalid Credentials");
   }
@@ -476,6 +516,8 @@ const updateOrderStatus = asyncHandler(async (req, res) => {
 });
 
 const stripeWebhook = asyncHandler(async (req, res) => {
+  console.log('🔔 Webhook received:', req.headers['stripe-signature'] ? 'With signature' : 'No signature');
+  
   const sig = req.headers['stripe-signature'];
   const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
@@ -483,16 +525,19 @@ const stripeWebhook = asyncHandler(async (req, res) => {
 
   try {
     event = stripe.webhooks.constructEvent(req.body, sig, endpointSecret);
+    console.log('✅ Webhook verified, event type:', event.type);
   } catch (err) {
-    console.error('Webhook signature verification failed:', err.message);
+    console.error('❌ Webhook signature verification failed:', err.message);
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
   // Handle the event using payment service
   try {
+    console.log('📧 Processing webhook event for notifications...');
     await processStripeWebhook(event);
+    console.log('✅ Webhook processed successfully');
   } catch (error) {
-    console.error('Error processing webhook event:', error);
+    console.error('❌ Error processing webhook event:', error);
   }
 
   res.json({ received: true });

@@ -32,8 +32,7 @@ const productSchema = new mongoose.Schema(
       type: String,
     },
     isFeatured: { type: Boolean, default: false },
-    published: { type: Boolean, default: false  },
-    reStock: { type: Boolean, default: false  },
+    reStock: { type: Boolean, default: false },
     regularPrice: {
       type: Number,
       required: true,

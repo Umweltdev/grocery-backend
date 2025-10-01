@@ -21,8 +21,8 @@ const {
   getOrderById,
   getOrdersByUserId,
   getUserOrders,
-  updateOrderStatus
-
+  updateOrderStatus,
+  stripeWebhook
 } = require("../controllers/userController");
 const { authMiddleware, isAdmin } = require("../middlewares/auth");
 

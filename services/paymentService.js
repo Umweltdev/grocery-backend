@@ -31,6 +31,10 @@ const getOrCreateStripeCustomer = async (user) => {
 };
 
 const initializeStripeCheckout = async (amount, email, userId, successUrl, cancelUrl, cartItems = [], customerId = null) => {
+  // Validate FRONTEND_URL
+  if (!process.env.FRONTEND_URL) {
+    throw new Error('FRONTEND_URL environment variable is required for Stripe checkout');
+  }
 
   const lineItems = [];
 
@@ -71,8 +75,8 @@ const initializeStripeCheckout = async (amount, email, userId, successUrl, cance
     payment_method_types: ['card'],
     line_items: lineItems,
     mode: 'payment',
-    success_url: successUrl || `${process.env.FRONTEND_URL}/success?session_id={CHECKOUT_SESSION_ID}`,
-    cancel_url: cancelUrl || `${process.env.FRONTEND_URL}/cancel`,
+    success_url: successUrl || `${process.env.FRONTEND_URL}/checkout-success?session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: cancelUrl || `${process.env.FRONTEND_URL}/checkout-cancel`,
     metadata: {
       userId: userId.toString(),
       itemCount: cartItems ? cartItems.length : 0,
@@ -96,12 +100,16 @@ const initializeStripeCheckout = async (amount, email, userId, successUrl, cance
     sessionConfig.customer_email = email;
   }
 
-  const session = await stripe.checkout.sessions.create(sessionConfig);
-
-  return {
-    sessionId: session.id,
-    url: session.url,
-  };
+  try {
+    const session = await stripe.checkout.sessions.create(sessionConfig);
+    return {
+      sessionId: session.id,
+      url: session.url,
+    };
+  } catch (error) {
+    console.error('Stripe checkout session creation failed:', error);
+    throw new Error(`Failed to create checkout session: ${error.message}`);
+  }
 };
 
 // Initialize Stripe payment with saved card
@@ -129,7 +137,7 @@ const initializeStripePaymentWithSavedCard = async (amount, user, paymentMethodI
           request_three_d_secure: 'automatic', // Only when required by regulation
         },
       },
-      return_url: `${process.env.FRONTEND_URL}/order-confirmation`,
+      return_url: `${process.env.FRONTEND_URL}/checkout-success`,
       metadata: {
         userId: user._id.toString(),
         userEmail: user.email,
