@@ -1,34 +1,39 @@
 const nodemailer = require("nodemailer");
-const asyncHandler = require("express-async-handler");
 
-const sendEmail = asyncHandler(async (data, req, res) => {
+const sendEmail = async (data) => {
   const path = require('path');
   
-  let transporter = nodemailer.createTransport({
-    service: "gmail",
-    auth: {
-      user: "ifeanyivalentine82@gmail.com",
-      pass: process.env.EMAIL_PASS,
-    },
-    tls: {
-      // do not fail on invalid certs
-      rejectUnauthorized: false,
-    },
-  });
+  try {
+    let transporter = nodemailer.createTransporter({
+      service: "gmail",
+      auth: {
+        user: "ifeanyivalentine82@gmail.com",
+        pass: process.env.EMAIL_PASS,
+      },
+      tls: {
+        rejectUnauthorized: false,
+      },
+    });
 
-  // send mail with defined transport object
-  let info = await transporter.sendMail({
-    from: '"Your Order Status 🛒" ifeanyivalentine82@gmail.com', // sender address
-    to: data.to,
-    subject: data.subject,
-    text: data.text,
-    html: data.htmt,
-    attachments: [{
-      filename: 'logo.svg',
-      path: path.join(__dirname, '../assets/logo.svg'),
-      cid: 'logo'
-    }]
-  });
-});
+    let info = await transporter.sendMail({
+      from: '"Grocery Store 🛒" <ifeanyivalentine82@gmail.com>',
+      to: data.to,
+      subject: data.subject,
+      text: data.text,
+      html: data.htm,
+      attachments: [{
+        filename: 'logo.svg',
+        path: path.join(__dirname, '../assets/logo.svg'),
+        cid: 'logo'
+      }]
+    });
+    
+    console.log('Email sent successfully:', info.messageId);
+    return info;
+  } catch (error) {
+    console.error('Email sending failed:', error);
+    throw error;
+  }
+};
 
 module.exports = sendEmail;
