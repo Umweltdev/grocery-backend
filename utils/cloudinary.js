@@ -6,6 +6,8 @@ cloudinary.config({
   api_secret: process.env.SECRET_KEY,
 });
 
+// changes
+
 const cloudinaryUploadImg = async (fileToUploads, folder) => {
   try {
     return new Promise((resolve, reject) => {
