@@ -132,7 +132,7 @@ const forgotPasswordToken = asyncHandler(async (req, res) => {
     const token = await user.createPasswordResetToken();
     await user.save();
     
-    const resetURL = `Hi, Please follow this link to reset Your Password. This link is valid till 60 minutes from now. <a href='${process.env.FRONTEND_URL || 'http://localhost:5173'}/reset-password/${token}'>Click Here</a>`;
+    const resetURL = `Hi, Please follow this link to reset Your Password. This link is valid till 60 minutes from now. <a href='${process.env.FRONTEND_URL}/reset-password/${token}'>Click Here</a>`;
     
     const data = {
       to: email,
