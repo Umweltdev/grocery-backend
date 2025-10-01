@@ -3,6 +3,7 @@ const sendEmail = require("../controllers/emailContoller");
 class NotificationService {
   static async sendOrderNotificationToAdmin(order, user) {
     try {
+      console.log('📧 Sending admin notification for order:', order.orderId);
       const emailData = {
         to: process.env.ADMIN_EMAIL,
         subject: `🛒 New Order Received - #${order.orderId}`,
@@ -82,8 +83,9 @@ class NotificationService {
         `,
       };
       await sendEmail(emailData);
+      console.log('✅ Admin notification sent successfully to:', process.env.ADMIN_EMAIL);
     } catch (error) {
-      console.error("Failed to send admin notification:", error);
+      console.error("❌ Failed to send admin notification:", error);
     }
   }
 
@@ -122,6 +124,7 @@ class NotificationService {
 
       const statusInfo = statusMessages[newStatus];
       if (statusInfo && order.orderBy?.email) {
+        console.log('📧 Sending customer notification for order:', order.orderId, 'Status:', newStatus);
         const emailData = {
           to: order.orderBy.email,
           subject: statusInfo.subject,
@@ -213,9 +216,10 @@ class NotificationService {
           `,
         };
         await sendEmail(emailData);
+        console.log('✅ Customer notification sent successfully to:', order.orderBy.email);
       }
     } catch (error) {
-      console.error("Failed to send customer notification:", error);
+      console.error("❌ Failed to send customer notification:", error);
     }
   }
 }

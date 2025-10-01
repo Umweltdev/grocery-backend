@@ -15,18 +15,23 @@ function generateRandomHex() {
 
 const createProduct = asyncHandler(async (req, res) => {
   try {
+    console.log('Request body:', req.body);
+    console.log('Request images:', req.images);
+    console.log('Request user:', req.user);
+    
     if (req.body.name) {
       req.body.slug = slugify(req.body.name);
     }
-    // console.log(req.images);
+    
     const newProduct = await Product.create({
       ...req.body,
       productId: generateRandomHex(),
-      images: req.images,
+      images: req.images || [],
     });
     res.json(newProduct);
   } catch (error) {
-    throw new Error(error);
+    console.error('Product creation error:', error);
+    res.status(500).json({ message: error.message });
   }
 });
 

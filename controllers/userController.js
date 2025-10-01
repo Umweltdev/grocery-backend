@@ -52,11 +52,38 @@ const createUser = asyncHandler(async (req, res) => {
 // Login a user
 const login = asyncHandler(async (req, res) => {
   const { emailOrPhone, password } = req.body;
+  
+  // Trim whitespace and validate inputs
+  const cleanEmailOrPhone = emailOrPhone?.trim();
+  const cleanPassword = password?.trim();
+  
+  console.log('Login attempt:', { 
+    emailOrPhone: cleanEmailOrPhone, 
+    passwordLength: cleanPassword?.length,
+    hasWhitespace: password !== cleanPassword
+  });
+  
+  if (!cleanEmailOrPhone || !cleanPassword) {
+    res.status(400);
+    throw new Error("Email/Phone and password are required");
+  }
+  
   // check if user exists or not
   const findUser = await User.findOne({
-    $or: [{ email: emailOrPhone }, { phone: emailOrPhone }],
+    $or: [{ email: cleanEmailOrPhone.toLowerCase() }, { phone: cleanEmailOrPhone }],
   });
-  if (findUser && (await findUser.isPasswordMatched(password))) {
+  
+  console.log('User found:', findUser ? 'Yes' : 'No');
+  if (findUser) {
+    console.log('Stored password hash:', findUser.password?.substring(0, 10) + '...');
+    console.log('Password comparison details:', {
+      inputLength: cleanPassword.length,
+      hashLength: findUser.password?.length,
+      inputFirstChars: cleanPassword.substring(0, 5) + '...',
+    });
+  }
+  
+  if (findUser && (await findUser.isPasswordMatched(cleanPassword))) {
     res.json({
       _id: findUser?._id,
       fullName: findUser?.fullName,
@@ -69,6 +96,19 @@ const login = asyncHandler(async (req, res) => {
       token: generateToken(findUser?._id),
     });
   } else {
+    const passwordMatch = findUser ? await findUser.isPasswordMatched(cleanPassword) : false;
+    console.log('Login failed - User found:', !!findUser, 'Password match:', passwordMatch);
+    
+    // Additional debugging for password issues
+    if (findUser && !passwordMatch) {
+      console.log('Password debugging:', {
+        originalPassword: `"${password}"`,
+        cleanedPassword: `"${cleanPassword}"`,
+        passwordsEqual: password === cleanPassword,
+        inputHasSpecialChars: /[^a-zA-Z0-9]/.test(cleanPassword)
+      });
+    }
+    
     res.status(401);
     throw new Error("Invalid Credentials");
   }
@@ -76,43 +116,70 @@ const login = asyncHandler(async (req, res) => {
 
 const forgotPasswordToken = asyncHandler(async (req, res) => {
   const { email } = req.body;
-  const user = await User.findOne({ email });
-  if (!user) {
-    const error = new Error("User not found with this email");
-    error.statusCode = 404;
-    throw error;
+  
+  if (!email || !email.trim()) {
+    res.status(400);
+    throw new Error("Email is required");
   }
+  
+  const user = await User.findOne({ email: email.trim().toLowerCase() });
+  if (!user) {
+    res.status(404);
+    throw new Error("User not found with this email");
+  }
+  
   try {
     const token = await user.createPasswordResetToken();
     await user.save();
-    const resetURL = `Hi, Please follow this link to reset Your Password. This link is valid till 10 minutes from now. <a href='http://localhost:8080/api/user/reset-password/${token}'>Click Here</>`;
+    
+    const resetURL = `Hi, Please follow this link to reset Your Password. This link is valid till 60 minutes from now. <a href='${process.env.FRONTEND_URL}/reset-password/${token}'>Click Here</a>`;
+    
     const data = {
       to: email,
-      text: "Hey User",
-      subject: "Forgot Password Link",
+      text: "Password Reset Request",
+      subject: "Reset Your Password - Grocery Store",
       htm: resetURL,
     };
-    sendEmail(data);
-    res.json(token);
+    
+    await sendEmail(data);
+    
+    res.json({ 
+      message: "Password reset email sent successfully. Please check your email.",
+      success: true 
+    });
   } catch (error) {
-    throw new Error(error);
+    console.error('Forgot password error:', error);
+    res.status(500);
+    throw new Error("Failed to send password reset email. Please try again.");
   }
 });
 
 const resetPassword = asyncHandler(async (req, res) => {
   const { password } = req.body;
   const { token } = req.params;
+  
+  if (!password || password.trim().length < 6) {
+    res.status(400);
+    throw new Error("Password must be at least 6 characters long");
+  }
+  
   const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
   const user = await User.findOne({
     passwordResetToken: hashedToken,
     passwordResetExpires: { $gt: Date.now() },
   });
-  if (!user) throw new Error(" Token Expired, Please try again later");
-  user.password = password;
+  
+  if (!user) {
+    res.status(400);
+    throw new Error("Token expired or invalid. Please request a new password reset.");
+  }
+  
+  user.password = password.trim();
   user.passwordResetToken = undefined;
   user.passwordResetExpires = undefined;
   await user.save();
-  res.json(user);
+  
+  res.json({ message: "Password reset successful. You can now login with your new password." });
 });
 
 const getLoggedInUserProfile = asyncHandler(async (req, res) => {
@@ -352,7 +419,7 @@ const createOrder = asyncHandler(async (req, res) => {
     const orderId = uuidv4();
 
     if (paymentMethod === "cash") {
-      return await processCashOrder({
+      const result = await processCashOrder({
         orderId,
         user,
         userCart,
@@ -362,10 +429,12 @@ const createOrder = asyncHandler(async (req, res) => {
         deliveryTime,
         res
       });
+      // Clear cart after successful cash order
+      await Cart.deleteOne({ orderBy: user._id });
+      return result;
     }
 
-
-    return await processCardOrder({
+    const result = await processCardOrder({
       orderId,
       user,
       userCart,
@@ -376,6 +445,12 @@ const createOrder = asyncHandler(async (req, res) => {
       deliveryTime,
       res
     });
+    
+    // Clear cart for immediate card payments (saved cards)
+    if (result && !result.checkoutUrl) {
+      await Cart.deleteOne({ orderBy: user._id });
+    }
+    return result;
 
   } catch (error) {
     console.error('Create order error:', error);
@@ -476,6 +551,8 @@ const updateOrderStatus = asyncHandler(async (req, res) => {
 });
 
 const stripeWebhook = asyncHandler(async (req, res) => {
+  console.log('🔔 Webhook received:', req.headers['stripe-signature'] ? 'With signature' : 'No signature');
+  
   const sig = req.headers['stripe-signature'];
   const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
@@ -483,16 +560,19 @@ const stripeWebhook = asyncHandler(async (req, res) => {
 
   try {
     event = stripe.webhooks.constructEvent(req.body, sig, endpointSecret);
+    console.log('✅ Webhook verified, event type:', event.type);
   } catch (err) {
-    console.error('Webhook signature verification failed:', err.message);
+    console.error('❌ Webhook signature verification failed:', err.message);
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
   // Handle the event using payment service
   try {
+    console.log('📧 Processing webhook event for notifications...');
     await processStripeWebhook(event);
+    console.log('✅ Webhook processed successfully');
   } catch (error) {
-    console.error('Error processing webhook event:', error);
+    console.error('❌ Error processing webhook event:', error);
   }
 
   res.json({ received: true });
