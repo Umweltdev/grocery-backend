@@ -14,8 +14,7 @@ const cors = require("cors");
 const { stripeWebhook } = require("./controllers/userController");
 
 // Stripe webhook requires raw body
-const stripeWebhookHandler = express.raw({ type: 'application/json' });
-
+const stripeWebhookHandler = express.raw({ type: "application/json" });
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -23,8 +22,8 @@ const PORT = process.env.PORT || 8080;
 dbConnect();
 
 const allowedOrigins = [
-  "https://groceri-store.netlify.app", 
-  "http://localhost:5173",            
+  "https://groceri-store.netlify.app",
+  "http://localhost:5173",
 ];
 
 app.use(
@@ -41,16 +40,14 @@ app.use(
   })
 );
 
-
- dbConnect();
+dbConnect();
 app.use(cors());
 
 // Stripe webhook endpoint with raw body parsing (must be before JSON parser)
 app.post("/api/user/stripe-webhook", stripeWebhookHandler, stripeWebhook);
 // General JSON parsing for all other routes
 app.use(express.json());
-app.use(express.urlencoded({extended: false}));
-
+app.use(express.urlencoded({ extended: false }));
 
 app.use("/api/user", userRouter);
 app.use("/api/category", categoryRouter);
@@ -66,5 +63,7 @@ app.use(errorHandler);
 app.listen(PORT, () => {
   console.log(`🚀 Server running at port ${PORT}`);
   console.log(`Frontend URL: ${process.env.FRONTEND_URL}`);
-  console.log(`Stripe Secret Key: ${process.env.STRIPE_SECRET_KEY ? 'Loaded' : 'Missing'}`);
+  console.log(
+    `Stripe Secret Key: ${process.env.STRIPE_SECRET_KEY ? "Loaded" : "Missing"}`
+  );
 });
