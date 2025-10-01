@@ -4,6 +4,25 @@ const Card = require('../models/cardModel');
 const Order = require('../models/orderModel');
 const Cart = require('../models/cartModel');
 const Product = require('../models/productModel');
+const Address = require('../models/addressModel');
+const { calculateDeliveryFee } = require('../utils/deliveryCalculator');
+
+// Helper function to calculate delivery fee
+const calculateDeliveryForOrder = async (addressId, userId) => {
+  const ORIGIN_ADDRESS = process.env.STORE_ADDRESS || "Unit 18 Catford Broadway, London SE9 3QN";
+  
+  const destinationAddressDoc = await Address.findOne({ 
+    _id: addressId, 
+    createdBy: userId 
+  });
+  
+  if (!destinationAddressDoc) {
+    throw new Error("Delivery address not found");
+  }
+
+  const destinationAddress = `${destinationAddressDoc.address}, ${destinationAddressDoc.state}, ${destinationAddressDoc.country}`;
+  return await calculateDeliveryFee(ORIGIN_ADDRESS, destinationAddress);
+};
 
 // Helper function to get or create Stripe customer
 const getOrCreateStripeCustomer = async (user) => {
@@ -30,22 +49,37 @@ const getOrCreateStripeCustomer = async (user) => {
   }
 };
 
-const initializeStripeCheckout = async (amount, email, userId, successUrl, cancelUrl, cartItems = [], customerId = null) => {
+const initializeStripeCheckout = async (amount, email, userId, successUrl, cancelUrl, cartItems = [], customerId = null, deliveryFee = 0, deliveryInfo = null) => {
  
   const lineItems = [];
+
+  // Add delivery fee as a separate line item if applicable
+  if (deliveryFee > 0) {
+    lineItems.push({
+      price_data: {
+        currency: 'gbp',
+        product_data: {
+          name: 'Delivery Fee',
+          description: deliveryInfo?.calculation || `Delivery within ${deliveryInfo?.distance}km`,
+        },
+        unit_amount: Math.round(deliveryFee * 100),
+      },
+      quantity: 1,
+    });
+  }
 
   if (cartItems && cartItems.length > 0) {
     cartItems.forEach((item) => {
       const quantity = item.count || 1;
-      const unitPrice = Math.round((item.price || 0) * 100); // Convert to cents
+      const unitPrice = Math.round((item.price || 0) * 100); // Convert to pence
       const subtotal = unitPrice * quantity;
 
       lineItems.push({
         price_data: {
-          currency: 'eur',
+          currency: 'gbp',
           product_data: {
             name: item.name || 'Product',
-            description: `Quantity: ${quantity} × $${(item.price || 0).toFixed(2)} each`,
+            description: `Quantity: ${quantity} × £${(item.price || 0).toFixed(2)} each`,
           },
           unit_amount: unitPrice,
         },
@@ -53,10 +87,10 @@ const initializeStripeCheckout = async (amount, email, userId, successUrl, cance
       });
     });
   } else {
- 
+    // Fallback for direct amount payment
     lineItems.push({
       price_data: {
-        currency: 'eur',
+        currency: 'gbp',
         product_data: {
           name: 'Order Payment',
           description: 'Complete your purchase',
@@ -72,7 +106,7 @@ const initializeStripeCheckout = async (amount, email, userId, successUrl, cance
     line_items: lineItems,
     mode: 'payment',
     payment_intent_data: {
-      setup_future_usage: 'off_session', // 👈 ensures the card stays attached
+      setup_future_usage: 'off_session',
     },
     success_url: successUrl || `${process.env.FRONTEND_URL}/success?session_id={CHECKOUT_SESSION_ID}`,
     cancel_url: cancelUrl || `${process.env.FRONTEND_URL}/cancel`,
@@ -80,8 +114,10 @@ const initializeStripeCheckout = async (amount, email, userId, successUrl, cance
       userId: userId.toString(),
       itemCount: cartItems ? cartItems.length : 0,
       totalAmount: amount,
+      deliveryFee: deliveryFee.toString(),
+      deliveryType: deliveryInfo?.deliveryType || 'delivery',
+      distance: deliveryInfo?.distance?.toString() || '0',
     },
-   
     payment_method_options: {
       card: {
         request_three_d_secure: 'automatic',
@@ -91,7 +127,6 @@ const initializeStripeCheckout = async (amount, email, userId, successUrl, cance
       enabled: false, 
     },
   };
-
 
   if (customerId) {
     sessionConfig.customer = customerId;
@@ -108,15 +143,14 @@ const initializeStripeCheckout = async (amount, email, userId, successUrl, cance
 };
 
 // Initialize Stripe payment with saved card
-const initializeStripePaymentWithSavedCard = async (amount, user, paymentMethodId) => {
+const initializeStripePaymentWithSavedCard = async (amount, user, paymentMethodId, deliveryFee = 0) => {
   try {
-
     const stripeCustomer = await getOrCreateStripeCustomer(user);
 
     const paymentIntent = await stripe.paymentIntents.create({
-      amount: Math.round(amount * 100),
-      currency: 'eur',
-      customer: stripeCustomer.id, // Use proper customer ID
+      amount: Math.round((amount + deliveryFee) * 100), // Include delivery fee
+      currency: 'gbp',
+      customer: stripeCustomer.id,
       payment_method: paymentMethodId,
       confirm: true,
       capture_method: 'automatic',
@@ -127,6 +161,7 @@ const initializeStripePaymentWithSavedCard = async (amount, user, paymentMethodI
       metadata: {
         userId: user._id.toString(),
         userEmail: user.email,
+        deliveryFee: deliveryFee.toString(),
       },
     });
 
@@ -168,17 +203,20 @@ const processSavedCardPayment = async ({ orderId, user, userCart, cardId, addres
       return res.status(404).json({ error: "Card not found" });
     }
 
+    // Calculate delivery fee
+    const deliveryInfo = await calculateDeliveryForOrder(address, user._id);
+    const totalPriceWithDelivery = userCart.cartTotal + deliveryInfo.deliveryFee;
+
     const stripePayment = await initializeStripePaymentWithSavedCard(
       userCart.cartTotal,
       user, 
-      card.paymentMethodId
+      card.paymentMethodId,
+      deliveryInfo.deliveryFee
     );
-
 
     if (stripePayment.status === "succeeded") {
       const existingOrder = await Order.findOne({ orderId: orderId });
       if (existingOrder) {
-   
         return res.json({
           message: "Payment successful - order already processed",
           status: stripePayment.status,
@@ -191,17 +229,21 @@ const processSavedCardPayment = async ({ orderId, user, userCart, cardId, addres
         userCart.products,
         "card",
         userCart.cartTotal,
+        totalPriceWithDelivery,
         user._id,
         "Processing",
         address,
         comment,
         deliveryDate,
         deliveryTime,
+        deliveryInfo.deliveryFee,
+        deliveryInfo.distance,
+        deliveryInfo.deliveryType,
         stripePayment.paymentIntentId
       );
 
-  
       user.orderCount += 1;
+      user.totalSpend += totalPriceWithDelivery;
       await user.save();
 
       await updateProductStock(userCart.products);
@@ -211,9 +253,14 @@ const processSavedCardPayment = async ({ orderId, user, userCart, cardId, addres
         message: "Payment successful",
         status: stripePayment.status,
         orderId: orderId,
+        deliveryFee: deliveryInfo.deliveryFee,
+        distance: deliveryInfo.distance,
+        cartTotal: userCart.cartTotal,
+        totalPriceWithDelivery: totalPriceWithDelivery,
+        deliveryType: deliveryInfo.deliveryType,
+        calculation: deliveryInfo.calculation
       });
     } else {
-    
       return res.status(400).json({
         error: "Payment failed",
         details: stripePayment.error || "Unknown error",
@@ -232,7 +279,10 @@ const processSavedCardPayment = async ({ orderId, user, userCart, cardId, addres
 // Process new checkout session
 const processNewCheckoutSession = async ({ orderId, user, userCart, address, comment, deliveryDate, deliveryTime, res }) => {
   try {
-  
+    // Calculate delivery fee
+    const deliveryInfo = await calculateDeliveryForOrder(address, user._id);
+    const totalPriceWithDelivery = userCart.cartTotal + deliveryInfo.deliveryFee;
+
     const stripeCustomer = await getOrCreateStripeCustomer(user);
 
     const stripePayment = await initializeStripeCheckout(
@@ -242,7 +292,9 @@ const processNewCheckoutSession = async ({ orderId, user, userCart, address, com
       null,
       null,
       userCart.products, 
-      stripeCustomer.id 
+      stripeCustomer.id,
+      deliveryInfo.deliveryFee,
+      deliveryInfo
     );
    
     const newOrder = await createNewOrder(
@@ -250,24 +302,32 @@ const processNewCheckoutSession = async ({ orderId, user, userCart, address, com
       userCart.products,
       "card",
       userCart.cartTotal,
+      totalPriceWithDelivery,
       user._id,
       "Pending",
       address,
       comment,
       deliveryDate,
       deliveryTime,
+      deliveryInfo.deliveryFee,
+      deliveryInfo.distance,
+      deliveryInfo.deliveryType,
       stripePayment.sessionId
     );
 
-  
     user.orderCount += 1;
     await user.save();
 
-   
     return res.json({
       message: "Redirect to payment",
       checkoutUrl: stripePayment.url,
       sessionId: stripePayment.sessionId,
+      deliveryFee: deliveryInfo.deliveryFee,
+      distance: deliveryInfo.distance,
+      cartTotal: userCart.cartTotal,
+      totalPriceWithDelivery: totalPriceWithDelivery,
+      deliveryType: deliveryInfo.deliveryType,
+      calculation: deliveryInfo.calculation
     });
   } catch (error) {
     console.error('Error in processNewCheckoutSession:', error);
@@ -283,29 +343,47 @@ const processCashOrder = async ({ orderId, user, userCart, address, comment, del
   const NotificationService = require('./notificationService');
 
   try {
+    // Calculate delivery fee
+    const deliveryInfo = await calculateDeliveryForOrder(address, user._id);
+    const totalPriceWithDelivery = userCart.cartTotal + deliveryInfo.deliveryFee;
+
     const newOrder = await createNewOrder(
       orderId,
       userCart.products,
       "cash",
       userCart.cartTotal,
+      totalPriceWithDelivery,
       user._id,
       "Processing",
       address,
       comment,
       deliveryDate,
-      deliveryTime
+      deliveryTime,
+      deliveryInfo.deliveryFee,
+      deliveryInfo.distance,
+      deliveryInfo.deliveryType
     );
 
     // Send admin notification for new cash order
     await NotificationService.sendOrderNotificationToAdmin(newOrder, user);
 
     user.orderCount += 1;
+    user.totalSpend += totalPriceWithDelivery;
     await user.save();
 
     await updateProductStock(userCart.products);
     await Cart.deleteOne({ orderBy: user._id });
 
-    return res.json({ message: "Order created successfully" });
+    return res.json({ 
+      message: "Order created successfully",
+      orderId: orderId,
+      deliveryFee: deliveryInfo.deliveryFee,
+      distance: deliveryInfo.distance,
+      cartTotal: userCart.cartTotal,
+      totalPriceWithDelivery: totalPriceWithDelivery,
+      deliveryType: deliveryInfo.deliveryType,
+      calculation: deliveryInfo.calculation
+    });
   } catch (error) {
     console.error('Error in processCashOrder:', error);
     return res.status(500).json({
@@ -318,7 +396,6 @@ const processCashOrder = async ({ orderId, user, userCart, address, comment, del
 // Helper function for card payments
 const processCardOrder = async ({ orderId, user, userCart, cardId, address, comment, deliveryDate, deliveryTime, res }) => {
   try {
-
     if (cardId) {
       return await processSavedCardPayment({
         orderId,
@@ -333,7 +410,6 @@ const processCardOrder = async ({ orderId, user, userCart, cardId, address, comm
       });
     }
 
-  
     return await processNewCheckoutSession({
       orderId,
       user,
@@ -354,22 +430,24 @@ const processCardOrder = async ({ orderId, user, userCart, cardId, address, comm
   }
 };
 
-// Create new order helper
+// Create new order helper (updated with delivery fields)
 const createNewOrder = async (
   orderId,
   products,
   paymentMethod,
   totalPrice,
+  totalPriceWithDelivery,
   userId,
   orderStatus,
   address,
   comment,
   deliveryDate,
   deliveryTime,
-  reference
+  deliveryFee = 0,
+  deliveryDistance = 0,
+  deliveryType = 'delivery',
+  reference = null
 ) => {
-
-
   return new Order({
     orderId,
     products: products.map((product) => ({
@@ -380,26 +458,28 @@ const createNewOrder = async (
     })),
     paymentMethod,
     totalPrice,
+    totalPriceWithDelivery,
     orderBy: userId,
     orderStatus,
     address,
     comment,
     deliveryDate,
     deliveryTime,
+    deliveryFee,
+    deliveryDistance,
+    deliveryType,
     reference,
   }).save();
 };
 
 // Update product stock helper
 const updateProductStock = async (products) => {
-  const updateOperations = products.map((item) => (
-
-    {
-      updateOne: {
-        filter: { _id: item.id },
-        update: { $inc: { stock: -item.count, sold: +item.count } },
-      },
-    }));
+  const updateOperations = products.map((item) => ({
+    updateOne: {
+      filter: { _id: item.id },
+      update: { $inc: { stock: -item.count, sold: +item.count } },
+    },
+  }));
 
   await Product.bulkWrite(updateOperations, {});
 };
@@ -433,28 +513,35 @@ const handleCheckoutSessionCompleted = async (session) => {
     if (order) {
       // Update order status to Processing and mark as paid
       if (order.orderStatus === 'Pending') {
-      const updatedOrder = await Order.findByIdAndUpdate(
-        { _id: order._id },
-        {
-          orderStatus: 'Processing',
-          isPaid: true,
-          paidAt: new Date(),
-        },
-        { new: true }
-      ).populate('orderBy');
+        const updatedOrder = await Order.findByIdAndUpdate(
+          { _id: order._id },
+          {
+            orderStatus: 'Processing',
+            isPaid: true,
+            paidAt: new Date(),
+          },
+          { new: true }
+        ).populate('orderBy');
 
-      // Send admin notification for new order
-      await NotificationService.sendOrderNotificationToAdmin(updatedOrder, order.orderBy);
+        // Update user total spend
+        await User.findByIdAndUpdate(order.orderBy, {
+          $inc: { totalSpend: order.totalPriceWithDelivery }
+        });
 
-      const userCart = await Cart.findOne({ orderBy: order.orderBy });
-      if (userCart) {
-        await updateProductStock(userCart.products);
-        await Cart.deleteOne({ orderBy: order.orderBy });
-      } else {
-        console.log('Skipping stock update - order already processed:', order.orderStatus);
-      }
+        // Send admin notification for new order
+        await NotificationService.sendOrderNotificationToAdmin(updatedOrder, order.orderBy);
+
+        const userCart = await Cart.findOne({ orderBy: order.orderBy });
+        if (userCart) {
+          await updateProductStock(userCart.products);
+          await Cart.deleteOne({ orderBy: order.orderBy });
+        } else {
+          console.log('Skipping stock update - order already processed:', order.orderStatus);
+        }
       }
     }
+
+    // Handle card saving logic (your existing code)
     if (session.payment_intent) {
       try {
         const paymentIntent = await stripe.paymentIntents.retrieve(session.payment_intent);
@@ -465,7 +552,6 @@ const handleCheckoutSessionCompleted = async (session) => {
           let userId = null;
           if (session.metadata && session.metadata.userId) {
             userId = session.metadata.userId;
-          
           } else {
             const order = await Order.findOne({ reference: session.id });
             if (order) {
@@ -537,6 +623,11 @@ const handlePaymentIntentSucceeded = async (paymentIntent) => {
           { new: true }
         ).populate('orderBy');
 
+        // Update user total spend
+        await User.findByIdAndUpdate(order.orderBy, {
+          $inc: { totalSpend: order.totalPriceWithDelivery }
+        });
+
         // Send admin notification for new order
         await NotificationService.sendOrderNotificationToAdmin(updatedOrder, order.orderBy);
 
@@ -549,9 +640,6 @@ const handlePaymentIntentSucceeded = async (paymentIntent) => {
         }
       }
     }
-
-    // Note: Card creation is handled only in checkout.session.completed
-    // for new cards. Existing cards are already saved in the database.
   } catch (error) {
     console.error('Error processing payment intent:', error);
     throw error;
@@ -571,4 +659,5 @@ module.exports = {
   processStripeWebhook,
   handleCheckoutSessionCompleted,
   handlePaymentIntentSucceeded,
+  calculateDeliveryForOrder
 };

@@ -71,6 +71,22 @@ const orderSchema = new mongoose.Schema({
   reference: {
     type: String,
   },
+  deliveryFee: {
+  type: Number,
+  default: 0
+},
+deliveryDistance: {
+  type: Number
+},
+deliveryType: {
+  type: String,
+  enum: ['delivery', 'collection'],
+  default: 'delivery'
+},
+totalPriceWithDelivery: {
+  type: Number,
+  required: true
+},
   orderBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "User",
