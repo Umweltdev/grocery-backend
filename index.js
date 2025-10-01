@@ -2,7 +2,6 @@ const express = require("express");
 const dbConnect = require("./config/dbConnect");
 const { notFound, errorHandler } = require("./middlewares/errorHandler");
 const dotenv = require("dotenv").config();
-const cors = require("cors");
 
 const userRouter = require("./routes/userRoute");
 const categoryRouter = require("./routes/categoryRoute");
