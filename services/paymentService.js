@@ -530,7 +530,7 @@ const handlePaymentIntentSucceeded = async (paymentIntent) => {
         const updatedOrder = await Order.findByIdAndUpdate(
           { _id: order._id },
           {
-            orderStatus: 'Processing',
+            orderStatus: 'Processing', 
             isPaid: true,
             paidAt: new Date(),
           },
