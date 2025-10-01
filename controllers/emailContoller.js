@@ -16,7 +16,7 @@ const sendEmail = async (data) => {
     });
 
     let info = await transporter.sendMail({
-      from: '"Grocery Store 🛒" <ifeanyivalentine82@gmail.com>',
+      from: '"Kacco Cash Store 🛒" <ifeanyivalentine82@gmail.com>',
       to: data.to,
       subject: data.subject,
       text: data.text,
