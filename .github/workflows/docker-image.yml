@@ -1,0 +1,28 @@
+name: Docker Image CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # ensures all files, including Dockerfile, are fetched
+
+      - name: List files (debug)
+        run: ls -la
+
+      - name: Build the Docker image
+        run: |
+          if [ ! -f Dockerfile ]; then
+            echo "Dockerfile not found!"
+            exit 1
+          fi
+          docker build . --file Dockerfile --tag my-image-name:$(date +%s)
