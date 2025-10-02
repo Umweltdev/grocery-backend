@@ -6,7 +6,7 @@ const generateRandomHex = require("../utils/randomGenerator");
 const createCategory = asyncHandler(async (req, res) => {
   try {
     const { parent } = req.body;
-    let level = 0;
+    let level = 1;
 
      if (parent) {
       const parentCategory = await Category.findById(parent);
