@@ -153,10 +153,7 @@ const initializeStripePaymentWithSavedCard = async (amount, user, paymentMethodI
     }
   } catch (error) {
     console.error('Error in initializeStripePaymentWithSavedCard:', error);
-    return {
-      status: 'failed',
-      error: error.message,
-    };
+    throw error; 
   }
 };
 
@@ -222,10 +219,7 @@ const processSavedCardPayment = async ({ orderId, user, userCart, cardId, addres
     }
   } catch (error) {
     console.error('Error in processSavedCardPayment:', error);
-    return res.status(500).json({
-      error: "Payment processing failed",
-      details: error.message,
-    });
+   throw error; 
   }
 };
 
@@ -271,10 +265,7 @@ const processNewCheckoutSession = async ({ orderId, user, userCart, address, com
     });
   } catch (error) {
     console.error('Error in processNewCheckoutSession:', error);
-    return res.status(500).json({
-      error: "Failed to create checkout session",
-      details: error.message,
-    });
+    throw error; 
   }
 };
 
@@ -308,10 +299,7 @@ const processCashOrder = async ({ orderId, user, userCart, address, comment, del
     return res.json({ message: "Order created successfully" });
   } catch (error) {
     console.error('Error in processCashOrder:', error);
-    return res.status(500).json({
-      error: "Failed to process cash order",
-      details: error.message,
-    });
+    throw error; 
   }
 };
 
@@ -347,10 +335,7 @@ const processCardOrder = async ({ orderId, user, userCart, cardId, address, comm
 
   } catch (error) {
     console.error('Error in processCardOrder:', error);
-    return res.status(500).json({
-      error: "Failed to process card order",
-      details: error.message,
-    });
+    throw error; 
   }
 };
 
