@@ -24,6 +24,8 @@ const allowedOrigins = [
   "https://groceri-store.netlify.app", 
   "http://localhost:5173",
   "http://72.61.17.35:5173",
+  "http://kaccocashncarry.co.uk",
+  "http://www.kaccocashncarry.co.uk",
 ];
 
 app.use(
