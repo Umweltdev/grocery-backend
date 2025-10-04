@@ -18,7 +18,7 @@ const pricingRouter = require("./routes/pricingRoute");
 const { stripeWebhook } = require("./controllers/userController");
 
 const app = express();
-const PORT = process.env.PORT || 8080;
+const PORT = process.env.PORT || 5713;
 
 // Connect to MongoDB
 dbConnect();
