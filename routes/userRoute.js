@@ -22,7 +22,8 @@ const {
   getOrdersByUserId,
   getUserOrders,
   updateOrderStatus,
-  stripeWebhook
+  stripeWebhook,
+  getUserWithOrders
 } = require("../controllers/userController");
 const { authMiddleware, isAdmin } = require("../middlewares/auth");
 
@@ -54,6 +55,6 @@ router.get("/:id", authMiddleware, isAdmin, getAUser);
 router.delete("/:id", authMiddleware, isAdmin, deleteAUser);
 router.put("/:id", authMiddleware, isAdmin, updateAUser);
 
-
+router.get("/:id/details", authMiddleware, getUserWithOrders);
 
 module.exports = router;

@@ -36,7 +36,7 @@ const createProduct = asyncHandler(async (req, res) => {
 });
 
 const updateProduct = asyncHandler(async (req, res) => {
-  const parsedPreviousImages = req.body.previousImages.map((imageString) =>
+  const parsedPreviousImages = req.body?.previousImages?.map((imageString) =>
     JSON.parse(imageString)
   );
   const { id } = req.params;
@@ -377,6 +377,27 @@ const getProductsByCategory = asyncHandler(async (req, res) => {
   }
 });
 
+const toggleProductPublish = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { published } = req.body;
+  validateMongoDbId(id);
+  try {
+    const product = await Product.findById(id);
+    if (!product) {
+      return res.status(404).json({ message: "Product not found" });
+    }
+    product.published = published;
+    await product.save();
+    res.status(200).json({
+      message: `Product ${published ? "published" : "unpublished"} successfully`,
+      product,
+    });
+  } catch (error) {
+    console.error("Toggle publish error:", error);
+    res.status(500).json({ message: "Failed to toggle publish status" });
+  }
+});
+
 module.exports = {
   createProduct,
   getaProduct,
@@ -387,6 +408,7 @@ module.exports = {
   rating,
   addToWishlist,
   getProductsByCategory,
+  toggleProductPublish
 };
 
 async function getNestedCategoryProductIds(category) {

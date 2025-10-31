@@ -8,7 +8,8 @@ const {
   searchProduct,
   rating,
   addToWishlist,
-  getProductsByCategory
+  getProductsByCategory,
+  toggleProductPublish
 } = require("../controllers/productController");
 const { isAdmin, authMiddleware } = require("../middlewares/auth");
 const {Multer,uploadImages} = require("../middlewares/uploadImage")
@@ -19,6 +20,7 @@ router.get("/search", searchProduct);
 router.get("/:id", getaProduct);
 router.get("/category/:id", getProductsByCategory);
 router.put("/:id", authMiddleware, isAdmin, Multer.array("images", 10), uploadImages, updateProduct);
+router.put("/toggle-publish/:id", authMiddleware, isAdmin, toggleProductPublish);
 router.delete("/:id", authMiddleware, isAdmin, deleteProduct);
 router.get("/", getAllProduct);
 router.put("/rating/:prodId", authMiddleware, rating);

@@ -20,6 +20,7 @@ const {
 const NotificationService = require("../services/notificationService");
 
 
+
 if (!process.env.STRIPE_SECRET_KEY) {
   console.error("STRIPE_SECRET_KEY is missing in env");
   throw new Error("Missing Stripe secret key");
@@ -534,7 +535,7 @@ const updateOrderStatus = asyncHandler(async (req, res) => {
       id,
       {
         orderStatus,
-        isPaid,
+        isPaid, 
       },
       { new: true }
     ).populate('orderBy');
@@ -578,6 +579,30 @@ const stripeWebhook = asyncHandler(async (req, res) => {
   res.json({ received: true });
 });
 
+const getUserWithOrders = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  try {
+    const user = await User.findById(id).select("-password -passwordResetToken -passwordResetExpires");
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+    const userOrders = await Order.find({ orderBy: id })
+      .populate({
+        path: "products.product",
+        select: "name",
+      })
+      .populate("address")
+      .sort({ orderDate: -1 });
+    res.json({
+      user,
+      orders: userOrders,
+    });
+  } catch (error) {
+    console.error("Error fetching user details:", error);
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+});
+
 module.exports = {
   createUser,
   login,
@@ -600,4 +625,5 @@ module.exports = {
   getUserOrders,
   updateOrderStatus,
   stripeWebhook,
+  getUserWithOrders
 };
